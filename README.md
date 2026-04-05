@@ -136,6 +136,12 @@ Weights live on the same `data[]` as rules and literals, so **transcription and 
 
 Invalid rule opcode bytes are normalized to **NOP** when rules are read (`getRule`), so evaluation treats them like inactive rows until REPAIR or mutation fixes the raw byte.
 
+Recent low-intensity opcode additions keep the same compatibility rule:
+
+- `SPILL` — spills a small amount of own stomach to local environment (self + orthogonal neighbors).
+- `JAM` — applies a short-lived defensive boundary jam that cuts cross-lineage coupling routes (e.g. horizontal tape transfer, foreign ABSORB coupling path) near the acting cell.
+- `VENT` — releases a small amount of own cell energy to local environment only when local energy pressure is high (not overflow-based).
+
 ### Seed vs initial genome
 
 - Runtime `seed` controls stochastic events during simulation/transcription (action noise, corruption events, swaps, stillbirth, etc.).

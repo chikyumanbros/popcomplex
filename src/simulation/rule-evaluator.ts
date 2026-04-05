@@ -3,6 +3,7 @@ import {
   ActionOpcode,
   CONDITIONS_OFFSET,
   MAX_RULES,
+  MAX_VALID_ACTION_OPCODE,
   RULE_SIZE,
   TAPE_SIZE,
   type ConditionRule,
@@ -65,6 +66,9 @@ const ACTION_COST_TAKE      = 0.1;
 const ACTION_COST_GIVE      = 0.05;
 const ACTION_COST_EMIT      = 0.15;
 const ACTION_COST_REPAIR    = 0.28;
+const ACTION_COST_SPILL     = 0.08;
+const ACTION_COST_JAM       = 0.06;
+const ACTION_COST_VENT      = 0.03;
 
 // Tape REPAIR (immune): same-org neighbor quorum boosts success (collective error correction bias)
 const REPAIR_NEIGHBOR_COEFF = 0.16; // success mult += coeff * sameOrthogonalNeighbors (0..4)
@@ -163,6 +167,12 @@ const MORPHOGEN_DECAY         = 0.05;  // 5% decay per tick
 const MARKER_BUMP = 4;
 const SOCIAL_SIGNAL_CONSENSUS_RATE = 0.06; // local same-org gossip coupling per tick
 const SOCIAL_REPAIR_COHESION_BONUS = 0.03; // cohesive neighborhoods repair slightly more reliably
+const JAM_MIN_TICKS = 2;
+const JAM_MAX_EXTRA_TICKS = 3;
+const NN_OUTPUT_EMA_ALPHA = 1.0; // 1.0 disables smoothing (use raw NN output)
+const VENT_PRESSURE_THRESHOLD = 0.7; // pressure starts above 70% of per-cell cap
+const VENT_PRESSURE_GAIN = 0.5;      // convert half of pressure head to release amount
+const VENT_RELEASE_MAX = 0.8;        // low-intensity max release per action
 
 // Marker slots: 0=eat, 1=digest, 2=signal, 3=move
 const MARKER_EAT    = 0 as const;
@@ -212,6 +222,7 @@ export class RuleEvaluator {
   private suppressionMode: SuppressionMode;
   private metabolicScale: number;
   private distressFireChanceScale: number;
+  private jamTicks: Uint8Array;
   private static readonly BROKEN_CAP_FALLBACK = 0;
 
   /**
@@ -231,6 +242,7 @@ export class RuleEvaluator {
     this.suppressionMode = opts.suppressionMode ?? 'on';
     this.metabolicScale = opts.metabolicScale ?? 1;
     this.distressFireChanceScale = opts.distressFireChanceScale ?? 1;
+    this.jamTicks = new Uint8Array(TOTAL_CELLS);
   }
 
   private neighborDirs(): [number, number][] {
@@ -455,7 +467,17 @@ export class RuleEvaluator {
       org.nnInput[6] = Math.min(1, markerDominance / n);
       org.nnInput[7] = Math.min(1, (envGradient / n) / 20);
 
-      org.nnOutput = org.nn.forward(org.nnInput);
+      const rawOutput = org.nn.forward(org.nnInput);
+      const prevMix = 1 - NN_OUTPUT_EMA_ALPHA;
+      for (let i = 0; i < NN_OUTPUT; i++) {
+        org.nnOutput[i] = org.nnOutput[i] * prevMix + rawOutput[i] * NN_OUTPUT_EMA_ALPHA;
+      }
+      // Blend between two softmax distributions stays normalized; clamp drift just in case.
+      let s = 0;
+      for (let i = 0; i < NN_OUTPUT; i++) s += org.nnOutput[i];
+      if (s > 1e-8) {
+        for (let i = 0; i < NN_OUTPUT; i++) org.nnOutput[i] /= s;
+      }
 
       let best = 0;
       for (let i = 1; i < NN_OUTPUT; i++) {
@@ -468,6 +490,9 @@ export class RuleEvaluator {
   // ==================== MAIN TICK ====================
   evaluate() {
     this.simTick++;
+    for (let i = 0; i < TOTAL_CELLS; i++) {
+      if (this.jamTicks[i] > 0) this.jamTicks[i]--;
+    }
     this.stepEnvDiffusion();
     this.movedThisTick.clear();
     this.digestRuleBoost.fill(0);
@@ -725,6 +750,24 @@ export class RuleEvaluator {
         this.writeFeedback(org, 1, Math.min(255, REPAIR_DEG_HEAL + mod / 4));
         return true;
       }
+      case ActionOpcode.SPILL: {
+        const amount = mod / 255 * 0.8; // low-strength local redistribution
+        const ok = this.actionSpill(cell, amount);
+        if (ok) this.writeFeedback(org, 2, mod);
+        return ok;
+      }
+      case ActionOpcode.JAM: {
+        const intensity = mod / 255;
+        const ok = this.actionJam(cell, intensity);
+        if (ok) this.writeFeedback(org, 5, mod);
+        return ok;
+      }
+      case ActionOpcode.VENT: {
+        const intensity = mod / 255;
+        const ok = this.actionVent(cell, intensity);
+        if (ok) this.writeFeedback(org, 6, mod);
+        return ok;
+      }
       default:
         return false;
     }
@@ -742,6 +785,9 @@ export class RuleEvaluator {
       case ActionOpcode.GIVE:      return ACTION_COST_GIVE;
       case ActionOpcode.EMIT:      return ACTION_COST_EMIT;
       case ActionOpcode.REPAIR:    return ACTION_COST_REPAIR;
+      case ActionOpcode.SPILL:     return ACTION_COST_SPILL;
+      case ActionOpcode.JAM:       return ACTION_COST_JAM;
+      case ActionOpcode.VENT:      return ACTION_COST_VENT;
       default:                     return 0;
     }
   }
@@ -859,7 +905,7 @@ export class RuleEvaluator {
     const wts: number[] = [];
     for (let i = 0; i < TAPE_SIZE; i++) {
       let w = tape.degradation[i];
-      if (this.isRuleOpcodeByte(i) && tape.data[i] > ActionOpcode.REPAIR) w += 52;
+      if (this.isRuleOpcodeByte(i) && tape.data[i] > MAX_VALID_ACTION_OPCODE) w += 52;
       if (w > 0) {
         cands.push(i);
         wts.push(w);
@@ -884,7 +930,7 @@ export class RuleEvaluator {
     const pTry = Math.min(0.93, REPAIR_BASE_P * bias * inten * socialBias);
     if (randomF32() > pTry) return false;
 
-    if (this.isRuleOpcodeByte(idx) && tape.data[idx] > ActionOpcode.REPAIR) {
+    if (this.isRuleOpcodeByte(idx) && tape.data[idx] > MAX_VALID_ACTION_OPCODE) {
       tape.data[idx] = ActionOpcode.NOP;
     }
     tape.degradation[idx] = Math.max(0, tape.degradation[idx] - REPAIR_DEG_HEAL);
@@ -1147,7 +1193,7 @@ export class RuleEvaluator {
       const nIdx = ny * GRID_WIDTH + nx;
       const ne = this.world.getCellEnergy(nx, ny);
 
-      if (this.morphAbsorbCompatible(cell.idx, nIdx)) {
+      if (this.morphAbsorbCompatible(cell.idx, nIdx) && !this.isEdgeJammed(cell.idx, nIdx)) {
         const eC = cell.energy;
         if (eC <= 0 && ne <= 0) continue;
         const avg = (eC + ne) / 2;
@@ -1172,6 +1218,76 @@ export class RuleEvaluator {
     return false;
   }
 
+  /** Spill a small amount of own stomach into local environment (self + orthogonal neighbors). */
+  private actionSpill(cell: CellCtx, amount: number): boolean {
+    const stomach = this.world.getStomachByIdx(cell.idx);
+    const spill = Math.min(stomach, Math.max(0, amount));
+    if (spill < 0.01) return false;
+
+    this.world.setStomachByIdx(cell.idx, stomach - spill);
+    const selfShare = spill * 0.5;
+    let nbShare = spill - selfShare;
+    this.envEnergy[cell.idx] += selfShare;
+
+    const neighbors: number[] = [];
+    for (const [dx, dy] of ORTH_DIRS) {
+      const nx = cell.x + dx;
+      const ny = cell.y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+      neighbors.push(ny * GRID_WIDTH + nx);
+    }
+    if (neighbors.length === 0) {
+      this.envEnergy[cell.idx] += nbShare;
+      return true;
+    }
+    const per = nbShare / neighbors.length;
+    for (const nIdx of neighbors) this.envEnergy[nIdx] += per;
+    return true;
+  }
+
+  /** Defensive cut: short-lived jam at foreign boundary edges around this cell. */
+  private actionJam(cell: CellCtx, intensity: number): boolean {
+    const extra = Math.round(Math.max(0, Math.min(1, intensity)) * JAM_MAX_EXTRA_TICKS);
+    const ttl = JAM_MIN_TICKS + extra;
+    let applied = false;
+    for (const [dx, dy] of ORTH_DIRS) {
+      const nx = cell.x + dx;
+      const ny = cell.y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+      const nIdx = ny * GRID_WIDTH + nx;
+      const nOrg = this.world.getOrganismIdByIdx(nIdx);
+      if (nOrg === 0 || nOrg === cell.orgId) continue;
+      this.markJammed(cell.idx, ttl);
+      this.markJammed(nIdx, ttl);
+      applied = true;
+    }
+    return applied;
+  }
+
+  /** Self-only pressure release: convert high cell energy head into local environmental heat. */
+  private actionVent(cell: CellCtx, intensity: number): boolean {
+    const cap = this.safeCellEnergyCapForOrg(cell.orgId);
+    if (cap <= 0) return false;
+    const pressure = Math.max(0, cell.energy - cap * VENT_PRESSURE_THRESHOLD);
+    if (pressure <= 0) return false;
+    const maxByMod = Math.max(0, Math.min(1, intensity)) * VENT_RELEASE_MAX;
+    const release = Math.min(cell.energy, pressure * VENT_PRESSURE_GAIN, maxByMod);
+    if (release < 0.01) return false;
+    cell.energy -= release;
+    cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
+    this.envEnergy[cell.idx] += release;
+    return true;
+  }
+
+  private markJammed(idx: number, ttl: number): void {
+    const next = Math.max(this.jamTicks[idx], Math.min(255, Math.max(0, ttl)));
+    this.jamTicks[idx] = next;
+  }
+
+  private isEdgeJammed(aIdx: number, bIdx: number): boolean {
+    return this.jamTicks[aIdx] > 0 || this.jamTicks[bIdx] > 0;
+  }
+
   /**
    * Low-rate cross-lineage tape transfer ("infection-like" HGT) at predatory absorb interface.
    * Transfer is resisted by local REPAIR quorum and paid as a small heat fee on success.
@@ -1183,6 +1299,7 @@ export class RuleEvaluator {
     steal: number,
     maxSteal: number,
   ): void {
+    if (this.isEdgeJammed(cell.idx, donorIdx)) return;
     const hostOrg = this.organisms.get(cell.orgId);
     const donorOrg = this.organisms.get(donorOrgId);
     if (!hostOrg || !donorOrg) return;

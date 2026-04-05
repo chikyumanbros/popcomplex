@@ -11,6 +11,22 @@ import {
   tapeFromSnapshot,
 } from '../simulation/tape';
 import { isProtectedDataDupTarget } from '../simulation/transcription';
+import { World } from '../simulation/world';
+import { OrganismManager } from '../simulation/organism';
+import { RuleEvaluator } from '../simulation/rule-evaluator';
+import { CellType, GRID_WIDTH } from '../simulation/constants';
+
+function idxOf(x: number, y: number): number {
+  return y * GRID_WIDTH + x;
+}
+
+function collectRuleOpcodes(data: Uint8Array): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < MAX_RULES; i++) {
+    out.push(data[CONDITIONS_OFFSET + i * RULE_SIZE + 2]);
+  }
+  return out;
+}
 
 function testProtoMoveGate() {
   const tape = createProtoTape();
@@ -60,11 +76,116 @@ function testSnapshotRoundtrip() {
   );
 }
 
+function testSpillLocalRedistribution() {
+  const world = new World();
+  const organisms = new OrganismManager();
+  const tape = createProtoTape();
+  const orgId = 1;
+  organisms.register(orgId, tape);
+  const x = 10;
+  const y = 10;
+  const idx = idxOf(x, y);
+  world.setCell(x, y, orgId, CellType.Stem, 20, tape.getLineagePacked());
+  organisms.get(orgId)!.cells.add(idx);
+  world.setStomachByIdx(idx, 1.0);
+
+  const evaluator = new RuleEvaluator(world, organisms);
+  const cell = { x, y, idx, energy: world.getCellEnergyByIdx(idx), orgId };
+  const ok = (evaluator as any).actionSpill(cell, 0.8);
+  assert.equal(ok, true, 'SPILL must succeed when stomach has enough content');
+
+  const stomachAfter = world.getStomachByIdx(idx);
+  assert.ok(stomachAfter < 1.0, 'SPILL must consume own stomach');
+  assert.ok((evaluator as any).envEnergy[idx] > 0, 'SPILL must add energy at self cell');
+  const northIdx = idxOf(x, y - 1);
+  assert.ok((evaluator as any).envEnergy[northIdx] > 0, 'SPILL must distribute some energy to orthogonal neighbors');
+}
+
+function testJamBlocksCrossLineageTransferAndAbsorbCoupling() {
+  const world = new World();
+  const organisms = new OrganismManager();
+  const hostTape = createProtoTape();
+  const donorTape = createProtoTape();
+  for (let i = 0; i < MAX_RULES; i++) {
+    const off = CONDITIONS_OFFSET + i * RULE_SIZE + 2;
+    hostTape.data[off] = ActionOpcode.NOP;
+    donorTape.data[off] = ActionOpcode.REPAIR;
+  }
+
+  const hostId = 1;
+  const donorId = 2;
+  organisms.register(hostId, hostTape);
+  organisms.register(donorId, donorTape);
+
+  const hx = 20;
+  const hy = 20;
+  const dx = 21;
+  const dy = 20;
+  const hostIdx = idxOf(hx, hy);
+  const donorIdx = idxOf(dx, dy);
+  world.setCell(hx, hy, hostId, CellType.Stem, 6, 0x123456);
+  world.setCell(dx, dy, donorId, CellType.Stem, 8, 0x123456);
+  world.setStomachByIdx(hostIdx, 10);
+  world.setMorphogenA(hostIdx, 2);
+  world.setMorphogenB(hostIdx, 2);
+  world.setMorphogenA(donorIdx, 2);
+  world.setMorphogenB(donorIdx, 2);
+  organisms.get(hostId)!.cells.add(hostIdx);
+  organisms.get(donorId)!.cells.add(donorIdx);
+
+  const evaluator = new RuleEvaluator(world, organisms);
+  const hostCell = { x: hx, y: hy, idx: hostIdx, energy: world.getCellEnergyByIdx(hostIdx), orgId: hostId };
+
+  const jamOk = (evaluator as any).actionJam(hostCell, 1.0);
+  assert.equal(jamOk, true, 'JAM must activate on foreign boundary');
+
+  const beforeOpcodes = collectRuleOpcodes(hostTape.data);
+  (evaluator as any).tryHorizontalTapeTransfer(hostCell, donorIdx, donorId, 1.0, 1.0);
+  const afterOpcodes = collectRuleOpcodes(hostTape.data);
+  assert.deepEqual(afterOpcodes, beforeOpcodes, 'JAM must block cross-lineage opcode transfer while active');
+
+  const stomachBefore = world.getStomachByIdx(hostIdx);
+  const absorbOk = (evaluator as any).actionAbsorb(hostCell, 2.0);
+  assert.equal(absorbOk, true, 'ABSORB should still be able to execute under JAM');
+  assert.ok(world.getStomachByIdx(hostIdx) > stomachBefore, 'JAM must suppress compatible absorb coupling route and fall back to one-way absorb');
+}
+
+function testVentReleasesOnlyWhenPressureIsHigh() {
+  const world = new World();
+  const organisms = new OrganismManager();
+  const tape = createProtoTape();
+  const orgId = 1;
+  organisms.register(orgId, tape);
+  const x = 30;
+  const y = 30;
+  const idx = idxOf(x, y);
+  world.setCell(x, y, orgId, CellType.Stem, 90, tape.getLineagePacked());
+  organisms.get(orgId)!.cells.add(idx);
+
+  const evaluator = new RuleEvaluator(world, organisms);
+  const cell = { x, y, idx, energy: world.getCellEnergyByIdx(idx), orgId };
+  const envBefore = (evaluator as any).envEnergy[idx];
+  const okHigh = (evaluator as any).actionVent(cell, 1.0);
+  assert.equal(okHigh, true, 'VENT must release energy when pressure is high');
+  assert.ok(world.getCellEnergyByIdx(idx) < 90, 'VENT must reduce cell energy on success');
+  assert.ok((evaluator as any).envEnergy[idx] > envBefore, 'VENT must add released energy to local environment');
+
+  const lowCell = { x, y, idx, energy: 10, orgId };
+  world.setCellEnergyByIdx(idx, 10);
+  const envAfterHigh = (evaluator as any).envEnergy[idx];
+  const okLow = (evaluator as any).actionVent(lowCell, 1.0);
+  assert.equal(okLow, false, 'VENT must not fire when pressure is low');
+  assert.equal((evaluator as any).envEnergy[idx], envAfterHigh, 'VENT low-pressure no-op must not change environment');
+}
+
 function main() {
   testProtoMoveGate();
   testDataDupProtectionScope();
   testProtoRuleTableSanity();
   testSnapshotRoundtrip();
+  testSpillLocalRedistribution();
+  testJamBlocksCrossLineageTransferAndAbsorbCoupling();
+  testVentReleasesOnlyWhenPressureIsHigh();
   console.log('[Tape smoke] OK');
 }
 
