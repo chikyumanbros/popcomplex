@@ -2,6 +2,14 @@
 
 Browser-based artificial life experiment: grid cells, tape-encoded rules, closed energy bookkeeping, WebGPU visualization.
 
+## Authorship note
+
+This program is developed with **vibe coding** (AI-assisted iterative prototyping and refinement).
+
+For an architecture/glossary explainer (Tape module, NN structure, and network structure), see:
+
+- `docs/tape-nn-network-explainer.md`
+
 ## Requirements
 
 - **Browser**: Chromium-based with **WebGPU** enabled (Chrome / Edge / Arc; Safari 18+ on macOS with WebGPU; Firefox status varies).

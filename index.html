@@ -73,13 +73,15 @@
       padding: 10px 14px;
       flex: 1;
       width: 100%;
+      min-height: 0;
       max-height: calc(100vh - 44px);
     }
+    /* Flex row + align-stretch made this shell wider than tall; the 256×256 sim was scaled non-uniformly. */
     .canvas-shell {
+      container-type: size;
       flex: 1;
       min-width: 0;
-      aspect-ratio: 1;
-      max-height: calc(100vh - 56px);
+      min-height: 0;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -91,7 +93,12 @@
         inset 0 1px 0 rgba(255, 255, 255, 0.05),
         0 12px 40px rgba(0, 0, 0, 0.5);
     }
-    .canvas-shell canvas {
+    .sim-canvas-square {
+      width: min(100cqw, 100cqh);
+      height: min(100cqw, 100cqh);
+      flex-shrink: 0;
+    }
+    .sim-canvas-square canvas {
       width: 100%;
       height: 100%;
       display: block;
@@ -253,36 +260,6 @@
     .corrupt-high { color: #f44; font-weight: bold; }
     .dim { color: #444; }
     #error { color: #f44; padding: 16px; font-size: 14px; }
-    .quick-run-panel {
-      background: var(--bg-panel);
-      border: 1px solid var(--border-soft);
-      padding: 10px;
-      border-radius: 8px;
-      font-size: 11px;
-      line-height: 1.45;
-    }
-    .quick-run-panel .quick-run-label {
-      color: var(--text-dim);
-      margin-bottom: 6px;
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .quick-run-panel .quick-run-url {
-      display: block;
-      word-break: break-all;
-      color: var(--accent);
-      text-decoration: none;
-      font-size: 10px;
-      margin-bottom: 8px;
-    }
-    .quick-run-panel .quick-run-url:hover { text-decoration: underline; }
-    .quick-run-panel .quick-run-actions {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .quick-run-panel .quick-run-actions button { font-size: 10px; padding: 4px 8px; }
     .ecology-chart-panel {
       background: var(--bg-panel);
       border: 1px solid var(--border-soft);
@@ -308,14 +285,15 @@
   </div>
   <div id="main">
     <div class="canvas-shell">
-      <canvas id="canvas"></canvas>
+      <div class="sim-canvas-square">
+        <canvas id="canvas"></canvas>
+      </div>
     </div>
     <div id="sidebar">
       <div id="controls"></div>
       <div id="ecology-chart-wrap" class="ecology-chart-panel">
         <canvas id="ecology-chart" aria-label="Organism count and Simpson diversity over time"></canvas>
       </div>
-      <div id="quick-run-panel" class="quick-run-panel" hidden></div>
       <div id="inspector">Shift+click a cell to inspect</div>
     </div>
   </div>

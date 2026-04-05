@@ -6,13 +6,7 @@ import { OrganismManager } from './simulation/organism';
 import { createProtoTape } from './simulation/tape';
 import { RuleEvaluator } from './simulation/rule-evaluator';
 import { buildAIHandoffMarkdown, buildAIHandoffPrompt, type AIHandoffPromptPreset } from './simulation/ai-handoff';
-import {
-  createUI,
-  updateStats,
-  viewPortCenterGrid,
-  pointerClientToGrid,
-  type UIState,
-} from './ui/controls';
+import { createUI, updateStats, type UIState } from './ui/controls';
 import { EcologyTrendChart } from './ui/ecology-chart';
 import { setupInspector } from './ui/inspector';
 import { StatsTracker } from './ui/stats';
@@ -26,7 +20,7 @@ import {
   type PopulationMetrics,
 } from './simulation/energy-metrics';
 import { setRandomSeed, getRandomSeed } from './simulation/rng';
-import { readRuntimeConfigFromUrl, DEFAULT_RUNTIME_SEED } from './simulation/runtime-config';
+import { readRuntimeConfigFromUrl } from './simulation/runtime-config';
 import { snapshotAndResetTelemetry } from './simulation/telemetry';
 import {
   addRegionalEnvBumps,
@@ -38,72 +32,8 @@ import {
 /** Full-grid `measurePopulationMetrics` only every N sim ticks — halves CPU vs chart+logs at speed 1. */
 const CHART_SAMPLE_EVERY_SIM_TICK = 2;
 
-/** Same query shape as `design-gate` mini-world + multi-origin inoculation (browser defaults differ otherwise). */
-function buildExperimentPresetUrl(): string {
-  const params = new URLSearchParams({
-    multiOrigin: '1',
-    culture: '1',
-    spawnEnergy: '150',
-    seed: String(DEFAULT_RUNTIME_SEED),
-    metabolicScale: '0.6',
-    distressScale: '0.3',
-  });
-  return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
-}
-
-function mountExperimentPresetUrlPanel(): void {
-  const presetUrl = buildExperimentPresetUrl();
-  console.log(`[Run] experiment preset URL: ${presetUrl}`);
-  const panel = document.getElementById('quick-run-panel');
-  if (!panel) return;
-
-  panel.hidden = false;
-  panel.replaceChildren();
-
-  const label = document.createElement('div');
-  label.className = 'quick-run-label';
-  label.textContent = 'Experiment preset (design-gate match)';
-
-  const link = document.createElement('a');
-  link.className = 'quick-run-url';
-  link.href = presetUrl;
-  link.textContent = presetUrl;
-
-  const actions = document.createElement('div');
-  actions.className = 'quick-run-actions';
-
-  const copyBtn = document.createElement('button');
-  copyBtn.type = 'button';
-  copyBtn.textContent = 'Copy URL';
-  copyBtn.addEventListener('click', () => {
-    void navigator.clipboard.writeText(presetUrl).then(
-      () => {
-        copyBtn.textContent = 'Copied';
-        window.setTimeout(() => {
-          copyBtn.textContent = 'Copy URL';
-        }, 1600);
-      },
-      () => {
-        console.log('[Run] clipboard unavailable; preset URL printed above');
-      },
-    );
-  });
-
-  const restartBtn = document.createElement('button');
-  restartBtn.type = 'button';
-  restartBtn.title = 'Reload; keeps current URL query';
-  restartBtn.textContent = 'Restart';
-  restartBtn.addEventListener('click', () => {
-    window.location.reload();
-  });
-
-  actions.append(copyBtn, restartBtn);
-  panel.append(label, link, actions);
-}
-
 async function main() {
   const cfg = readRuntimeConfigFromUrl();
-  mountExperimentPresetUrlPanel();
   setRandomSeed(cfg.seed);
   console.log(
     `[Run] seed:${getRandomSeed()} neighbor:${cfg.neighborMode} budget:${cfg.budgetMode} suppression:${cfg.suppressionMode} spawnEnergy:${cfg.spawnInitialEnergy} metabolicScale:${cfg.metabolicScale} distressScale:${cfg.distressFireChanceScale} multiOrigin:${cfg.multiOrigin} culture:${cfg.culture}`,
@@ -154,17 +84,6 @@ async function main() {
   if (cfg.multiOrigin || cfg.culture) {
     spawnTricladProtos(world, organisms, ruleEval, createProtoTape(), cfg.spawnInitialEnergy, DEFAULT_TRICLADE_SITES);
   }
-
-  document.getElementById('btn-spawn')!.addEventListener('click', () => {
-    const { gx, gy } = viewPortCenterGrid(ui);
-    spawnProtoAt(world, organisms, ruleEval, cfg.spawnInitialEnergy, gx, gy);
-  });
-
-  canvas.addEventListener('click', (e) => {
-    if (e.shiftKey) return;
-    const { gx, gy } = pointerClientToGrid(canvas, ui, e.clientX, e.clientY);
-    spawnProtoAt(world, organisms, ruleEval, cfg.spawnInitialEnergy, gx, gy);
-  });
 
   let tick = 0;
   let frameCount = 0;
@@ -246,19 +165,21 @@ async function main() {
         trackTurnover();
         tick++;
         advanced = true;
-      }
-      if (advanced && ecologyChart && tick % CHART_SAMPLE_EVERY_SIM_TICK === 0) {
-        const pop = measurePopulationMetrics(world, organisms);
-        lastChartPopForLog = pop;
-        lastChartSampleTick = tick;
-        ecologyChart.sample(
-          tick,
-          organisms.count,
-          pop.simpsonDiversity,
-          pop.uniqueLineages,
-          pop.topLineageShare,
-          pop.perimeterRatio,
-        );
+        // Sample on every Nth *simulation* tick, not once per animation frame — high speed or
+        // throttled rAF (background tab) must not skip intermediate sample points.
+        if (ecologyChart && tick % CHART_SAMPLE_EVERY_SIM_TICK === 0) {
+          const pop = measurePopulationMetrics(world, organisms);
+          lastChartPopForLog = pop;
+          lastChartSampleTick = tick;
+          ecologyChart.sample(
+            tick,
+            organisms.count,
+            pop.simpsonDiversity,
+            pop.uniqueLineages,
+            pop.topLineageShare,
+            pop.perimeterRatio,
+          );
+        }
       }
     }
 
@@ -339,26 +260,6 @@ function simulationTick(
   organisms.tick();
   world.syncLineageToCells(organisms);
   ruleEval.enforceClosedEnergyBudget();
-}
-
-function spawnProtoAt(
-  world: World,
-  organisms: OrganismManager,
-  ruleEval: RuleEvaluator,
-  spawnInitialEnergy: number,
-  x: number,
-  y: number,
-) {
-  x = Math.max(2, Math.min(GRID_WIDTH - 3, x));
-  y = Math.max(2, Math.min(GRID_HEIGHT - 3, y));
-  if (!world.isEmpty(x, y)) return;
-  if (!ruleEval.withdrawEnvUniform(spawnInitialEnergy)) return;
-
-  const tape = createProtoTape();
-  const id = world.spawnProto(x, y, tape.getLineagePacked(), spawnInitialEnergy);
-  organisms.register(id, tape, { parentId: null, birthTick: 0 });
-  const org = organisms.get(id)!;
-  org.cells.add(y * GRID_WIDTH + x);
 }
 
 interface LogWorldStateOpts {

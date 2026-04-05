@@ -100,7 +100,6 @@ export function createUI(canvas: HTMLCanvasElement): UIState {
       <label>Speed: <input id="speed" type="range" min="1" max="20" value="1"><span id="speed-val"> 1</span></label>
     </div>
     <div class="control-row">
-      <button id="btn-spawn">Spawn life</button>
       <button id="btn-restart" type="button" title="Reload page; keeps current URL query (same seed / multiOrigin / etc.)">Restart</button>
       <button id="btn-ai-handoff" type="button" title="Copy markdown report for AI / debugging">Copy AI report</button>
     </div>
@@ -115,8 +114,7 @@ export function createUI(canvas: HTMLCanvasElement): UIState {
       <button id="btn-ai-handoff-prompt" type="button" title="Copy report plus a ready-to-paste AI prompt">Copy AI report + prompt</button>
     </div>
     <div class="control-row hint">
-      Click: spawn at cell · Shift+click: inspect<br>
-      Spawn button: view center · Scroll: zoom · Middle-drag: pan<br>
+      Shift+click: inspect · Scroll: zoom · Middle-drag: pan<br>
       <kbd>V</kbd>: cycle field view (default → env → morph → stomach → markers → energy)
     </div>
     <div class="view-mode-banner" title="Press V to cycle — same as top-right header pill">

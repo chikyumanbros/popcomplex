@@ -18,7 +18,8 @@ const COL_BG = '#0e1218';
 export class EcologyTrendChart {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
-  private readonly dpr: number;
+  private dpr = 1;
+  private resizeObserver: ResizeObserver | null = null;
   private ticks: number[] = [];
   private orgs: number[] = [];
   private simpson: number[] = [];
@@ -32,10 +33,17 @@ export class EcologyTrendChart {
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('EcologyTrendChart: 2d context unavailable');
     this.ctx = ctx;
-    this.dpr = 1;
     this.resize();
     if (typeof window !== 'undefined') {
       window.addEventListener('resize', () => this.resize());
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) this.redrawNow();
+      });
+    }
+    const parent = this.canvas.parentElement;
+    if (parent && typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => this.resize());
+      this.resizeObserver.observe(parent);
     }
   }
 
@@ -44,17 +52,28 @@ export class EcologyTrendChart {
     let w = parent ? parent.clientWidth : 0;
     if (w < 48) w = 240;
     const cssH = 156;
+    const pxr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
+    this.dpr = Math.min(2.5, pxr > 0 && Number.isFinite(pxr) ? pxr : 1);
     this.canvas.style.width = `${w}px`;
     this.canvas.style.height = `${cssH}px`;
-    this.canvas.width = Math.floor(w * this.dpr);
-    this.canvas.height = Math.floor(cssH * this.dpr);
+    this.canvas.width = Math.max(1, Math.floor(w * this.dpr));
+    this.canvas.height = Math.max(1, Math.floor(cssH * this.dpr));
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.scheduleDraw();
+  }
+
+  /** Synchronous draw when rAF was deferred (e.g. tab background) so the plot is not left stale. */
+  private redrawNow(): void {
+    this.drawPending = false;
+    this.draw();
   }
 
   scheduleDraw(): void {
     if (this.drawPending) return;
     this.drawPending = true;
+    if (typeof document !== 'undefined' && document.hidden) {
+      return;
+    }
     requestAnimationFrame(() => {
       this.drawPending = false;
       this.draw();
@@ -208,11 +227,14 @@ export class EcologyTrendChart {
     ctx.fillText(minR.toFixed(2), padL + plotW + 4, padT + plotH);
 
     const legY = padT + plotH + 14;
+    const dotR = 3;
     const dot = (x: number, col: string, label: string) => {
       ctx.fillStyle = col;
-      ctx.fillRect(x, legY - 6, 7, 3);
+      ctx.beginPath();
+      ctx.arc(x + dotR, legY - 3.5, dotR, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = COL_TEXT;
-      ctx.fillText(label, x + 10, legY - 2);
+      ctx.fillText(label, x + dotR * 2 + 4, legY - 2);
     };
     ctx.textAlign = 'left';
     ctx.font = '9px ui-monospace, monospace';
