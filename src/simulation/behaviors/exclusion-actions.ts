@@ -6,6 +6,16 @@ const ORTH_DIRS: [number, number][] = [
   [0, 1],
   [-1, 0],
 ];
+const EIGHT_DIRS: [number, number][] = [
+  [0, -1],
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+  [1, -1],
+  [1, 1],
+  [-1, 1],
+  [-1, -1],
+];
 
 export interface ExclusionCell {
   x: number;
@@ -26,9 +36,11 @@ export function applyJamToForeignBoundary(
   markJammed: (idx: number, jamTtl: number) => void,
   gridWidth: number,
   gridHeight: number,
+  useEightNeighbors = false,
 ): boolean {
+  const dirs = useEightNeighbors ? EIGHT_DIRS : ORTH_DIRS;
   let applied = false;
-  for (const [dx, dy] of ORTH_DIRS) {
+  for (const [dx, dy] of dirs) {
     const nx = cell.x + dx;
     const ny = cell.y + dy;
     if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;

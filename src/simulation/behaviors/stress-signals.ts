@@ -4,6 +4,16 @@ const ORTH_DIRS: [number, number][] = [
   [0, 1],
   [-1, 0],
 ];
+const EIGHT_DIRS: [number, number][] = [
+  [0, -1],
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+  [1, -1],
+  [1, 1],
+  [-1, 1],
+  [-1, -1],
+];
 
 const DISTRESS_FIRE_CHANCE = 0.2;
 const DISTRESS_ENERGY_THRESH = 3;
@@ -100,10 +110,12 @@ export function computeForeignContactPressure(
   getOrganismIdAt: (x: number, y: number) => number,
   gridWidth: number,
   gridHeight: number,
+  useEightNeighbors = false,
 ): number {
+  const dirs = useEightNeighbors ? EIGHT_DIRS : ORTH_DIRS;
   let occupied = 0;
   let foreign = 0;
-  for (const [dx, dy] of ORTH_DIRS) {
+  for (const [dx, dy] of dirs) {
     const nx = cell.x + dx;
     const ny = cell.y + dy;
     if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;

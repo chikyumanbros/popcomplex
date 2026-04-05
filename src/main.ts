@@ -32,6 +32,14 @@ import {
 /** Full-grid `measurePopulationMetrics` only every N sim ticks — halves CPU vs chart+logs at speed 1. */
 const CHART_SAMPLE_EVERY_SIM_TICK = 2;
 
+/**
+ * Background tabs throttle `requestAnimationFrame` heavily; drive the CPU sim with `setInterval` instead.
+ * Step budget approximates visible-tab rate (~60 rAF/s × ui.speed) over each wake interval.
+ */
+const BACKGROUND_TICK_MS = 200;
+const MAX_BACKGROUND_SIM_STEPS = 800;
+const ASSUMED_VISIBLE_FPS = 60;
+
 async function main() {
   const cfg = readRuntimeConfigFromUrl();
   setRandomSeed(cfg.seed);
@@ -99,11 +107,106 @@ async function main() {
 
   let lastChartPopForLog: PopulationMetrics | null = null;
   let lastChartSampleTick = -1;
-  
+
   // Frame rate limiting (optional: set to 0 for unlimited, or e.g. 60 for 60fps cap)
   const TARGET_FPS = 0; // 0 = unlimited
   const FRAME_MIN_MS = TARGET_FPS > 0 ? 1000 / TARGET_FPS : 0;
   let lastFrameTime = performance.now();
+
+  let driverRaf = 0;
+  let driverInterval = 0;
+
+  function simulationStepsForBackgroundWake(): number {
+    return Math.min(
+      MAX_BACKGROUND_SIM_STEPS,
+      Math.max(1, Math.round((ui.speed * ASSUMED_VISIBLE_FPS * BACKGROUND_TICK_MS) / 1000)),
+    );
+  }
+
+  function runSimStepBatch(steps: number): boolean {
+    let advanced = false;
+    for (let s = 0; s < steps; s++) {
+      simulationTick(world, organisms, ruleEval, ui);
+      trackTurnover();
+      tick++;
+      advanced = true;
+      if (ecologyChart && tick % CHART_SAMPLE_EVERY_SIM_TICK === 0) {
+        const pop = measurePopulationMetrics(world, organisms);
+        lastChartPopForLog = pop;
+        lastChartSampleTick = tick;
+        ecologyChart.sample(
+          tick,
+          organisms.count,
+          pop.simpsonDiversity,
+          pop.uniqueLineages,
+          pop.topLineageShare,
+          pop.perimeterRatio,
+        );
+      }
+    }
+    return advanced;
+  }
+
+  function refreshBookkeepingAndStats(advanced: boolean) {
+    if (advanced || frameCount % 10 === 0) {
+      bkNow = measureEnergyBookkeeping(world, ruleEval);
+      measured = biomassReservoirTotal(bkNow);
+      closed = ruleEval.ecosystemEnergyBudget;
+      drift = measured - closed;
+    }
+    updateStats(tick, organisms.count, stats.fps, closed, measured, drift, ui.viewMode);
+  }
+
+  function maybeLogWorldState() {
+    if (tick > 0 && tick % 10 === 0 && tick !== lastLoggedTick) {
+      lastLoggedTick = tick;
+      const pop =
+        lastChartSampleTick === tick && lastChartPopForLog
+          ? lastChartPopForLog
+          : measurePopulationMetrics(world, organisms);
+      const telem = snapshotAndResetTelemetry();
+      logWorldState(organisms, ruleEval, world, {
+        tick,
+        bookkeepingNow: bkNow,
+        bookkeepingAtLastLog,
+        closedBudget: closed,
+        drift,
+        popMetrics: pop,
+        telemetry: telem,
+        birthsSinceLastLog,
+        deathsSinceLastLog,
+        onAfterLog(next: EnergyBookkeeping) {
+          bookkeepingAtLastLog = next;
+          birthsSinceLastLog = 0;
+          deathsSinceLastLog = 0;
+        },
+      });
+    }
+  }
+
+  function scheduleVisibleFrame() {
+    driverRaf = requestAnimationFrame(frame);
+  }
+
+  function syncDriverToVisibility() {
+    if (document.hidden) {
+      if (driverRaf !== 0) {
+        cancelAnimationFrame(driverRaf);
+        driverRaf = 0;
+      }
+      if (driverInterval === 0) {
+        driverInterval = window.setInterval(backgroundFrame, BACKGROUND_TICK_MS);
+      }
+    } else {
+      if (driverInterval !== 0) {
+        clearInterval(driverInterval);
+        driverInterval = 0;
+      }
+      if (driverRaf === 0) {
+        scheduleVisibleFrame();
+      }
+    }
+  }
 
   if (ecologyChart) {
     const pop0 = measurePopulationMetrics(world, organisms);
@@ -157,18 +260,19 @@ async function main() {
   });
 
   function frame() {
-    requestAnimationFrame(frame);
-    
+    driverRaf = 0;
+
     // Frame rate limiting
     if (FRAME_MIN_MS > 0) {
       const now = performance.now();
       const elapsed = now - lastFrameTime;
       if (elapsed < FRAME_MIN_MS) {
-        return; // Skip this frame
+        if (!document.hidden) scheduleVisibleFrame();
+        return;
       }
       lastFrameTime = now;
     }
-    
+
     stats.recordFrame();
     frameCount++;
 
@@ -176,27 +280,7 @@ async function main() {
     if (!ui.paused || ui.stepRequested) {
       const steps = ui.stepRequested ? 1 : ui.speed;
       ui.stepRequested = false;
-      for (let s = 0; s < steps; s++) {
-        simulationTick(world, organisms, ruleEval, ui);
-        trackTurnover();
-        tick++;
-        advanced = true;
-        // Sample on every Nth *simulation* tick, not once per animation frame — high speed or
-        // throttled rAF (background tab) must not skip intermediate sample points.
-        if (ecologyChart && tick % CHART_SAMPLE_EVERY_SIM_TICK === 0) {
-          const pop = measurePopulationMetrics(world, organisms);
-          lastChartPopForLog = pop;
-          lastChartSampleTick = tick;
-          ecologyChart.sample(
-            tick,
-            organisms.count,
-            pop.simpsonDiversity,
-            pop.uniqueLineages,
-            pop.topLineageShare,
-            pop.perimeterRatio,
-          );
-        }
-      }
+      advanced = runSimStepBatch(steps);
     }
 
     // GPU: display only — full sim (rules, metabolism, neural propagation) runs on CPU first.
@@ -208,43 +292,30 @@ async function main() {
     renderer.draw(encoder, 0);
     gpu!.device.queue.submit([encoder.finish()]);
 
-    // Heavy bookkeeping scan runs only when simulation advanced.
-    // While paused, refresh occasionally to keep UI values from going stale.
-    if (advanced || frameCount % 10 === 0) {
-      bkNow = measureEnergyBookkeeping(world, ruleEval);
-      measured = biomassReservoirTotal(bkNow);
-      closed = ruleEval.ecosystemEnergyBudget;
-      drift = measured - closed;
-    }
-    updateStats(tick, organisms.count, stats.fps, closed, measured, drift, ui.viewMode);
+    refreshBookkeepingAndStats(advanced);
+    maybeLogWorldState();
 
-    if (tick > 0 && tick % 10 === 0 && tick !== lastLoggedTick) {
-      lastLoggedTick = tick;
-      const pop =
-        lastChartSampleTick === tick && lastChartPopForLog
-          ? lastChartPopForLog
-          : measurePopulationMetrics(world, organisms);
-      const telem = snapshotAndResetTelemetry();
-      logWorldState(organisms, ruleEval, world, {
-        tick,
-        bookkeepingNow: bkNow,
-        bookkeepingAtLastLog,
-        closedBudget: closed,
-        drift,
-        popMetrics: pop,
-        telemetry: telem,
-        birthsSinceLastLog,
-        deathsSinceLastLog,
-        onAfterLog(next: EnergyBookkeeping) {
-          bookkeepingAtLastLog = next;
-          birthsSinceLastLog = 0;
-          deathsSinceLastLog = 0;
-        },
-      });
+    if (!document.hidden) {
+      scheduleVisibleFrame();
     }
   }
 
-  requestAnimationFrame(frame);
+  function backgroundFrame() {
+    frameCount++;
+
+    let advanced = false;
+    if (!ui.paused || ui.stepRequested) {
+      const steps = ui.stepRequested ? 1 : simulationStepsForBackgroundWake();
+      ui.stepRequested = false;
+      advanced = runSimStepBatch(steps);
+    }
+
+    refreshBookkeepingAndStats(advanced);
+    maybeLogWorldState();
+  }
+
+  document.addEventListener('visibilitychange', () => syncDriverToVisibility());
+  syncDriverToVisibility();
 
   function trackTurnover() {
     const currentIds = new Set<number>(organisms.organisms.keys());

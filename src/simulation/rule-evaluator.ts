@@ -115,7 +115,11 @@ const FOREIGN_INTERFACE_METABOLISM = 0.055;
 const MOVE_REPEL_FOREIGN_FACE = 14;
 /** MOVE score penalty per world-edge face after shift (soft repulsion from map boundary). */
 const MOVE_REPEL_MAP_EDGE_FACE = 4;
-const DIAGONAL_MOVE_COST_MULT = 1.4;
+const DIAGONAL_MOVE_COST_MULT = Math.SQRT2;
+/** Base diagonal bonus to counter axis-aligned lattice preference. */
+const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_BASE = 0.24;
+/** Extra diagonal bonus scaled by NN move drive (keeps the preference in the NN path). */
+const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN = 0.16;
 
 /**
  * ABSORB at a heterospecific face: if both morphogen channels are close on the two cells, relax cell
@@ -227,6 +231,11 @@ export class RuleEvaluator {
 
   private neighborDirs(): [number, number][] {
     return this.neighborMode === 'four' ? ORTH_DIRS : EIGHT_DIRS;
+  }
+
+  /** MOVE candidates are always 8-way so diagonal approach stays available even in 4-neighbor ecology mode. */
+  private moveDirs(): [number, number][] {
+    return EIGHT_DIRS;
   }
 
   private safeCellEnergyCapForOrg(orgId: number): number {
@@ -773,8 +782,9 @@ export class RuleEvaluator {
 
   /** Repair quorum: 1 per same-org neighbor + weighted foreign “kin” matches (deceptive pigment helps only if chemistry aligns). */
   private repairQuorumKin(cell: CellCtx): number {
+    const dirs = this.neighborDirs();
     let sum = 0;
-    for (const [dx, dy] of ORTH_DIRS) {
+    for (const [dx, dy] of dirs) {
       const nx = cell.x + dx,
         ny = cell.y + dy;
       if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
@@ -969,7 +979,7 @@ export class RuleEvaluator {
     if (org.cells.size === 0) return false;
     let bestDir: [number, number] = [0, 0];
     let bestScore = -Infinity;
-    for (const [dx, dy] of this.neighborDirs()) {
+    for (const [dx, dy] of this.moveDirs()) {
       if (!this.canMoveOrg(org, dx, dy)) continue;
       let score = 0;
       for (const idx of org.cells) {
@@ -982,7 +992,10 @@ export class RuleEvaluator {
       const { foreignFaces, edgeFaces } = this.countRepulsionFacesIfOrgShifted(org, dx, dy);
       score -= MOVE_REPEL_FOREIGN_FACE * foreignFaces + MOVE_REPEL_MAP_EDGE_FACE * edgeFaces;
       if (dx !== 0 && dy !== 0) {
-        score -= MOVE_COST_PER_CELL * DIAGONAL_MOVE_COST_MULT * org.cells.size;
+        const nnMove = Math.max(0, Math.min(1, org.nnOutput[NN_MOVE] ?? 0));
+        const diagonalBiasPerCell =
+          DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_BASE + DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN * nnMove;
+        score += diagonalBiasPerCell * org.cells.size;
       }
       // slight random exploration scaled by NN move urgency
       score += (randomF32() - 0.3) * org.nnOutput[NN_MOVE] * 20;
@@ -1031,7 +1044,7 @@ export class RuleEvaluator {
     }
     const minRequired = REPRODUCE_ACTION_COST + 1;
     if (cell.energy < minRequired) return false;
-    for (const [dx, dy] of ORTH_DIRS) {
+    for (const [dx, dy] of this.neighborDirs()) {
       const nx = cell.x + dx, ny = cell.y + dy;
       if (!this.world.isEmpty(nx, ny)) continue;
       const childTape = transcribeForReproduction(org.tape);
@@ -1106,7 +1119,7 @@ export class RuleEvaluator {
     return false;
   }
 
-  /** Spill a small amount of own stomach into local environment (self + orthogonal neighbors). */
+  /** Spill a small amount of own stomach into local environment (self + local neighbors). */
   private actionSpill(cell: CellCtx, amount: number): boolean {
     return spillStomachToNearbyEnv(
       cell,
@@ -1118,6 +1131,7 @@ export class RuleEvaluator {
       },
       GRID_WIDTH,
       GRID_HEIGHT,
+      this.neighborMode === 'eight',
     );
   }
 
@@ -1131,6 +1145,7 @@ export class RuleEvaluator {
       (idx, jamTtl) => this.markJammed(idx, jamTtl),
       GRID_WIDTH,
       GRID_HEIGHT,
+      this.neighborMode === 'eight',
     );
   }
 
@@ -1193,18 +1208,20 @@ export class RuleEvaluator {
     }
   }
 
-  /** 0..1: foreign-face share among occupied orthogonal neighbors around host cell. */
+  /** 0..1: foreign-face share among occupied neighbors around host cell. */
   private foreignContactPressure(cell: CellCtx): number {
     return computeForeignContactPressure(
       cell,
       (x, y) => this.world.getOrganismId(x, y),
       GRID_WIDTH,
       GRID_HEIGHT,
+      this.neighborMode === 'eight',
     );
   }
 
   // ==================== MORPHOGEN DIFFUSION ====================
   private diffuseMorphogens(org: Organism) {
+    const dirs = this.neighborDirs();
     const deltaA = new Map<number, number>();
     const deltaB = new Map<number, number>();
 
@@ -1216,7 +1233,7 @@ export class RuleEvaluator {
       const x = idx % GRID_WIDTH, y = (idx - x) / GRID_WIDTH;
       let sameNeighbors = 0;
       const neighbors: number[] = [];
-      for (const [dx, dy] of ORTH_DIRS) {
+      for (const [dx, dy] of dirs) {
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
         const ni = ny * GRID_WIDTH + nx;
@@ -1258,7 +1275,7 @@ export class RuleEvaluator {
         const enzymeEff = Math.max(0, Math.min(1, cellE / 3));
         const specBonus = 1 + this.world.getMarkerByIdx(idx, MARKER_DIGEST) / 255;
         const boostMul = 1 + this.digestRuleBoost[idx]; // already ≤ DIGEST_RULE_BOOST_CAP
-        const sameRatio = this.sameOrgOrthNeighborRatioByIdx(idx, org.id);
+        const sameRatio = this.sameOrgNeighborRatioByIdx(idx, org.id);
         const networkMul = DIGEST_NETWORK_BASE + DIGEST_NETWORK_COEFF * sameRatio;
         const digested = stomach * PASSIVE_DIGEST_RATE * enzymeEff * specBonus * boostMul * networkMul;
         const heat = digested * DIGESTION_HEAT_LOSS;
@@ -1278,7 +1295,7 @@ export class RuleEvaluator {
       const dominanceMult = getDominanceMetabolicMultiplier(share, this.suppressionMode === 'on');
       const perCell = getPerCellMetabolicBase(org.cells.size, dominanceMult, this.metabolicScale);
       for (const idx of org.cells) {
-        const sameRatio = this.sameOrgOrthNeighborRatioByIdx(idx, org.id);
+        const sameRatio = this.sameOrgNeighborRatioByIdx(idx, org.id);
         const isolationMult = 1 + ISOLATION_METABOLIC_PENALTY * (1 - sameRatio);
         const e = this.world.getCellEnergyByIdx(idx);
         const cost = Math.min(e, perCell * isolationMult);
@@ -1426,17 +1443,18 @@ export class RuleEvaluator {
 
   // ==================== HELPERS ====================
 
-  private sameOrgOrthNeighborRatioByIdx(idx: number, orgId: number): number {
+  private sameOrgNeighborRatioByIdx(idx: number, orgId: number): number {
+    const dirs = this.neighborDirs();
     const x = idx % GRID_WIDTH;
     const y = (idx - x) / GRID_WIDTH;
     let same = 0;
-    for (const [dx, dy] of ORTH_DIRS) {
+    for (const [dx, dy] of dirs) {
       const nx = x + dx;
       const ny = y + dy;
       if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
       if (this.world.getOrganismId(nx, ny) === orgId) same++;
     }
-    return same / 4;
+    return same / dirs.length;
   }
 
   private spendEnergy(cell: CellCtx, cost: number) {
@@ -1447,6 +1465,7 @@ export class RuleEvaluator {
 
   /** Spatial redistribution of env energy; global sum drift from open boundaries is corrected by `enforceClosedEnergyBudget`. */
   private stepEnvDiffusion() {
+    const dirs = this.neighborDirs();
     const src = this.envEnergy;
     const dst = this.envScratch;
     for (let y = 0; y < GRID_HEIGHT; y++) {
@@ -1455,20 +1474,11 @@ export class RuleEvaluator {
         const c = src[i];
         let sum = 0,
           cnt = 0;
-        if (x > 0) {
-          sum += src[i - 1];
-          cnt++;
-        }
-        if (x < GRID_WIDTH - 1) {
-          sum += src[i + 1];
-          cnt++;
-        }
-        if (y > 0) {
-          sum += src[i - GRID_WIDTH];
-          cnt++;
-        }
-        if (y < GRID_HEIGHT - 1) {
-          sum += src[i + GRID_WIDTH];
+        for (const [dx, dy] of dirs) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+          sum += src[ny * GRID_WIDTH + nx];
           cnt++;
         }
         dst[i] = c + (sum / cnt - c) * ENV_DIFFUSION_RATE;
@@ -1515,9 +1525,10 @@ export class RuleEvaluator {
    * This creates agreement dynamics from interaction topology without adding explicit "social mode".
    */
   private applySocialConsensusDrift(cell: CellCtx, orgId: number): void {
+    const dirs = this.neighborDirs();
     let same = 0;
     let sumSignal = 0;
-    for (const [dx, dy] of ORTH_DIRS) {
+    for (const [dx, dy] of dirs) {
       const nx = cell.x + dx;
       const ny = cell.y + dy;
       if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
@@ -1530,7 +1541,8 @@ export class RuleEvaluator {
 
     const [eat, digest, signal, move] = this.world.getMarkersByIdx(cell.idx);
     const meanSignal = sumSignal / same;
-    const coupling = SOCIAL_SIGNAL_CONSENSUS_RATE * Math.min(1, same / 2);
+    const couplingNorm = Math.max(2, dirs.length / 2);
+    const coupling = SOCIAL_SIGNAL_CONSENSUS_RATE * Math.min(1, same / couplingNorm);
     const nextSignal = Math.round(signal + (meanSignal - signal) * coupling);
     this.world.setMarkersByIdx(cell.idx, eat, digest, Math.max(0, Math.min(255, nextSignal)), move);
 
@@ -1538,11 +1550,12 @@ export class RuleEvaluator {
     recordSocialCohesion(cohesion);
   }
 
-  /** 0..1: how close this cell's signal marker is to same-org local orthogonal mean. */
+  /** 0..1: how close this cell's signal marker is to same-org local mean. */
   private localSignalCohesion(cell: CellCtx): number {
+    const dirs = this.neighborDirs();
     let same = 0;
     let sumSignal = 0;
-    for (const [dx, dy] of ORTH_DIRS) {
+    for (const [dx, dy] of dirs) {
       const nx = cell.x + dx;
       const ny = cell.y + dy;
       if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
