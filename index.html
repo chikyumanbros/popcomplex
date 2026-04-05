@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PopComplex - Artificial Life</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg-deep: #07090c;
+      --bg-panel: #0e1218;
+      --border: #1e2836;
+      --border-soft: #2a3545;
+      --text: #c4cdd8;
+      --text-dim: #6b7a8c;
+      --accent: #5eb8c4;
+    }
+    body {
+      background: radial-gradient(120% 80% at 50% -20%, #121c28 0%, var(--bg-deep) 55%);
+      color: var(--text);
+      font-family: ui-monospace, 'Cascadia Code', 'SF Mono', 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #header {
+      padding: 10px 18px;
+      font-size: 13px;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      max-width: 1100px;
+      border-bottom: 1px solid var(--border);
+    }
+    #header .brand {
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+    #header .header-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    #header-view-mode {
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.03em;
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(94, 184, 196, 0.4);
+      background: rgba(94, 184, 196, 0.1);
+      white-space: nowrap;
+    }
+    #header #fps {
+      font-variant-numeric: tabular-nums;
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+    #main {
+      display: flex;
+      gap: 14px;
+      padding: 10px 14px;
+      flex: 1;
+      width: 100%;
+      max-height: calc(100vh - 44px);
+    }
+    .canvas-shell {
+      flex: 1;
+      min-width: 0;
+      aspect-ratio: 1;
+      max-height: calc(100vh - 56px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(ellipse 90% 70% at 50% 35%, #141d28 0%, #0a0e14 72%);
+      border-radius: 10px;
+      padding: 8px;
+      border: 1px solid var(--border);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        0 12px 40px rgba(0, 0, 0, 0.5);
+    }
+    .canvas-shell canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      border-radius: 4px;
+      border: 1px solid #0d1117;
+      image-rendering: pixelated;
+      cursor: crosshair;
+    }
+    #sidebar {
+      width: 272px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 12px;
+      overflow-y: auto;
+    }
+    #controls {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-soft);
+      padding: 10px 10px 12px;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+    }
+    .control-row {
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #1a222e;
+      color: var(--text);
+      border: 1px solid var(--border-soft);
+      padding: 5px 11px;
+      cursor: pointer;
+      border-radius: 5px;
+      font-family: inherit;
+      font-size: 11px;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    button:hover {
+      background: #243040;
+      border-color: var(--accent);
+      color: #fff;
+    }
+    input[type="range"] { width: 80px; }
+    label { display: flex; align-items: center; gap: 4px; }
+    /* Stats: one metric per row — fits narrow sidebar without horizontal overflow */
+    .stats-panel {
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      font-family: 'Courier New', Courier, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    .stats-kv {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      column-gap: 8px;
+      align-items: baseline;
+    }
+    .stats-kv-main {
+      color: #6eb88a;
+      font-size: 11px;
+    }
+    .stats-kv-energy {
+      color: #6aa8b8;
+      font-size: 10px;
+    }
+    .stats-kv .stat-lbl {
+      text-align: left;
+      justify-self: start;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .stats-kv-main .stat-lbl { color: #4a8a62; }
+    .stats-kv-energy .stat-lbl { color: #508898; }
+    .stats-kv .stat-val {
+      text-align: right;
+      justify-self: stretch;
+      min-width: 0;
+    }
+    .hint { color: #4a5568; font-size: 10px; line-height: 1.45; }
+    .hint kbd {
+      display: inline-block;
+      padding: 0 4px;
+      font-size: 9px;
+      border: 1px solid var(--border-soft);
+      border-radius: 3px;
+      background: #151a22;
+      color: var(--text-dim);
+    }
+    .view-mode-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 8px 0 2px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(94, 184, 196, 0.35);
+      background: rgba(20, 32, 42, 0.95);
+    }
+    .view-mode-banner-label {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+    }
+    .view-mode-banner-val {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      flex: 1;
+      text-align: center;
+      min-width: 0;
+    }
+    .view-mode-banner-hint {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+    #inspector {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-soft);
+      padding: 10px;
+      border-radius: 8px;
+      min-height: 80px;
+      font-size: 11px;
+      color: #888;
+      line-height: 1.5;
+      overflow-y: auto;
+      max-height: 400px;
+    }
+    .inspector-header { color: var(--accent); font-weight: 600; margin-bottom: 6px; letter-spacing: 0.02em; }
+    .inspector-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+    .inspector-table td { padding: 1px 4px; }
+    .inspector-table td:nth-child(odd) { color: #666; }
+    .inspector-table td:nth-child(even) { color: #aaa; text-align: right; }
+    .inspector-table td.ins-num {
+      font-variant-numeric: tabular-nums;
+      min-width: 7ch;
+    }
+    .ins-lineage { font-size: 10px; color: #8a7; }
+    .ins-markers { color: #a86; font-size: 10px; margin: 3px 0; font-variant-numeric: tabular-nums; }
+    .nn-bias { color: #a8a; margin: 4px 0; }
+    .ins-rules { font-size: 9px; color: #7a8494; margin: 6px 0 4px; border-top: 1px solid #222; padding-top: 4px; line-height: 1.35; }
+    .ins-rules-hdr { color: #555; margin-bottom: 3px; }
+    .ins-rule-line { font-variant-numeric: tabular-nums; }
+    .ins-ri { color: #5a6570; display: inline-block; width: 1.6em; }
+    .ins-rawop { color: #c96; font-size: 8px; }
+    .tape-view { font-family: monospace; font-size: 9px; color: #555; line-height: 1.3; margin-top: 4px; border-top: 1px solid #222; padding-top: 4px; }
+    .corrupt-low { color: #a80; }
+    .corrupt-high { color: #f44; font-weight: bold; }
+    .dim { color: #444; }
+    #error { color: #f44; padding: 16px; font-size: 14px; }
+    .quick-run-panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-soft);
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .quick-run-panel .quick-run-label {
+      color: var(--text-dim);
+      margin-bottom: 6px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .quick-run-panel .quick-run-url {
+      display: block;
+      word-break: break-all;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 10px;
+      margin-bottom: 8px;
+    }
+    .quick-run-panel .quick-run-url:hover { text-decoration: underline; }
+    .quick-run-panel .quick-run-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .quick-run-panel .quick-run-actions button { font-size: 10px; padding: 4px 8px; }
+    .ecology-chart-panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-soft);
+      border-radius: 8px;
+      padding: 8px 8px 6px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+    }
+    .ecology-chart-panel canvas {
+      display: block;
+      width: 100%;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <span class="brand">PopComplex</span>
+    <div class="header-right">
+      <span id="header-view-mode" title="Press V to cycle field visualization (shader modes)">View 1/6 — Default</span>
+      <span id="fps"></span>
+    </div>
+  </div>
+  <div id="main">
+    <div class="canvas-shell">
+      <canvas id="canvas"></canvas>
+    </div>
+    <div id="sidebar">
+      <div id="controls"></div>
+      <div id="ecology-chart-wrap" class="ecology-chart-panel">
+        <canvas id="ecology-chart" aria-label="Organism count and Simpson diversity over time"></canvas>
+      </div>
+      <div id="quick-run-panel" class="quick-run-panel" hidden></div>
+      <div id="inspector">Shift+click a cell to inspect</div>
+    </div>
+  </div>
+  <div id="error"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
