@@ -150,34 +150,6 @@ function testJamBlocksCrossLineageTransferAndAbsorbCoupling() {
   assert.ok(world.getStomachByIdx(hostIdx) > stomachBefore, 'JAM must suppress compatible absorb coupling route and fall back to one-way absorb');
 }
 
-function testVentReleasesOnlyWhenPressureIsHigh() {
-  const world = new World();
-  const organisms = new OrganismManager();
-  const tape = createProtoTape();
-  const orgId = 1;
-  organisms.register(orgId, tape);
-  const x = 30;
-  const y = 30;
-  const idx = idxOf(x, y);
-  world.setCell(x, y, orgId, CellType.Stem, 90, tape.getLineagePacked());
-  organisms.get(orgId)!.cells.add(idx);
-
-  const evaluator = new RuleEvaluator(world, organisms);
-  const cell = { x, y, idx, energy: world.getCellEnergyByIdx(idx), orgId };
-  const envBefore = (evaluator as any).envEnergy[idx];
-  const okHigh = (evaluator as any).actionVent(cell, 1.0);
-  assert.equal(okHigh, true, 'VENT must release energy when pressure is high');
-  assert.ok(world.getCellEnergyByIdx(idx) < 90, 'VENT must reduce cell energy on success');
-  assert.ok((evaluator as any).envEnergy[idx] > envBefore, 'VENT must add released energy to local environment');
-
-  const lowCell = { x, y, idx, energy: 10, orgId };
-  world.setCellEnergyByIdx(idx, 10);
-  const envAfterHigh = (evaluator as any).envEnergy[idx];
-  const okLow = (evaluator as any).actionVent(lowCell, 1.0);
-  assert.equal(okLow, false, 'VENT must not fire when pressure is low');
-  assert.equal((evaluator as any).envEnergy[idx], envAfterHigh, 'VENT low-pressure no-op must not change environment');
-}
-
 function main() {
   testProtoMoveGate();
   testDataDupProtectionScope();
@@ -185,7 +157,6 @@ function main() {
   testSnapshotRoundtrip();
   testSpillLocalRedistribution();
   testJamBlocksCrossLineageTransferAndAbsorbCoupling();
-  testVentReleasesOnlyWhenPressureIsHigh();
   console.log('[Tape smoke] OK');
 }
 

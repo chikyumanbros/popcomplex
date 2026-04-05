@@ -140,7 +140,6 @@ Recent low-intensity opcode additions keep the same compatibility rule:
 
 - `SPILL` — spills a small amount of own stomach to local environment (self + orthogonal neighbors).
 - `JAM` — applies a short-lived defensive boundary jam that cuts cross-lineage coupling routes (e.g. horizontal tape transfer, foreign ABSORB coupling path) near the acting cell.
-- `VENT` — releases a small amount of own cell energy to local environment only when local energy pressure is high (not overflow-based).
 
 ### Seed vs initial genome
 

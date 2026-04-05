@@ -28,7 +28,6 @@ The implementation style prioritizes quick run-observe-adjust loops over rigid u
 | `normalizeActionOpcode` | Maps corrupt/unknown opcode bytes to `NOP` for safe evaluation. |
 | `SPILL` | Low-intensity action opcode that redistributes own stomach to local environment (self + orthogonal neighbors). |
 | `JAM` | Defensive action opcode that temporarily cuts cross-lineage boundary coupling near the acting cell. |
-| `VENT` | Low-intensity action opcode that vents own cell energy to local environment when energy pressure is high. |
 | `tapeSnapshotBase64` | Snapshot format for the full 512 bytes (`data + degradation`) as base64. |
 
 ### Tape Layout Summary
@@ -84,7 +83,6 @@ Built per organism in `RuleEvaluator.updateNeuralNetworks()`:
 - `3`: `NN_CONSERVE` (conserve/digest urgency)
 
 Outputs form a probability distribution; argmax is stored as `nnDominant` and reused in rule conditions.
-Runtime applies a small EMA smoothing to NN outputs before argmax (mood inertia), so behavior is less jittery while keeping the same tape format and parameter count.
 
 ---
 

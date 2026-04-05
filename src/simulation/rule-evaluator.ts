@@ -68,7 +68,6 @@ const ACTION_COST_EMIT      = 0.15;
 const ACTION_COST_REPAIR    = 0.28;
 const ACTION_COST_SPILL     = 0.08;
 const ACTION_COST_JAM       = 0.06;
-const ACTION_COST_VENT      = 0.03;
 
 // Tape REPAIR (immune): same-org neighbor quorum boosts success (collective error correction bias)
 const REPAIR_NEIGHBOR_COEFF = 0.16; // success mult += coeff * sameOrthogonalNeighbors (0..4)
@@ -169,10 +168,6 @@ const SOCIAL_SIGNAL_CONSENSUS_RATE = 0.06; // local same-org gossip coupling per
 const SOCIAL_REPAIR_COHESION_BONUS = 0.03; // cohesive neighborhoods repair slightly more reliably
 const JAM_MIN_TICKS = 2;
 const JAM_MAX_EXTRA_TICKS = 3;
-const NN_OUTPUT_EMA_ALPHA = 1.0; // 1.0 disables smoothing (use raw NN output)
-const VENT_PRESSURE_THRESHOLD = 0.7; // pressure starts above 70% of per-cell cap
-const VENT_PRESSURE_GAIN = 0.5;      // convert half of pressure head to release amount
-const VENT_RELEASE_MAX = 0.8;        // low-intensity max release per action
 
 // Marker slots: 0=eat, 1=digest, 2=signal, 3=move
 const MARKER_EAT    = 0 as const;
@@ -467,17 +462,7 @@ export class RuleEvaluator {
       org.nnInput[6] = Math.min(1, markerDominance / n);
       org.nnInput[7] = Math.min(1, (envGradient / n) / 20);
 
-      const rawOutput = org.nn.forward(org.nnInput);
-      const prevMix = 1 - NN_OUTPUT_EMA_ALPHA;
-      for (let i = 0; i < NN_OUTPUT; i++) {
-        org.nnOutput[i] = org.nnOutput[i] * prevMix + rawOutput[i] * NN_OUTPUT_EMA_ALPHA;
-      }
-      // Blend between two softmax distributions stays normalized; clamp drift just in case.
-      let s = 0;
-      for (let i = 0; i < NN_OUTPUT; i++) s += org.nnOutput[i];
-      if (s > 1e-8) {
-        for (let i = 0; i < NN_OUTPUT; i++) org.nnOutput[i] /= s;
-      }
+      org.nnOutput = org.nn.forward(org.nnInput);
 
       let best = 0;
       for (let i = 1; i < NN_OUTPUT; i++) {
@@ -762,12 +747,6 @@ export class RuleEvaluator {
         if (ok) this.writeFeedback(org, 5, mod);
         return ok;
       }
-      case ActionOpcode.VENT: {
-        const intensity = mod / 255;
-        const ok = this.actionVent(cell, intensity);
-        if (ok) this.writeFeedback(org, 6, mod);
-        return ok;
-      }
       default:
         return false;
     }
@@ -787,7 +766,6 @@ export class RuleEvaluator {
       case ActionOpcode.REPAIR:    return ACTION_COST_REPAIR;
       case ActionOpcode.SPILL:     return ACTION_COST_SPILL;
       case ActionOpcode.JAM:       return ACTION_COST_JAM;
-      case ActionOpcode.VENT:      return ACTION_COST_VENT;
       default:                     return 0;
     }
   }
@@ -1262,21 +1240,6 @@ export class RuleEvaluator {
       applied = true;
     }
     return applied;
-  }
-
-  /** Self-only pressure release: convert high cell energy head into local environmental heat. */
-  private actionVent(cell: CellCtx, intensity: number): boolean {
-    const cap = this.safeCellEnergyCapForOrg(cell.orgId);
-    if (cap <= 0) return false;
-    const pressure = Math.max(0, cell.energy - cap * VENT_PRESSURE_THRESHOLD);
-    if (pressure <= 0) return false;
-    const maxByMod = Math.max(0, Math.min(1, intensity)) * VENT_RELEASE_MAX;
-    const release = Math.min(cell.energy, pressure * VENT_PRESSURE_GAIN, maxByMod);
-    if (release < 0.01) return false;
-    cell.energy -= release;
-    cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
-    this.envEnergy[cell.idx] += release;
-    return true;
   }
 
   private markJammed(idx: number, ttl: number): void {

@@ -73,11 +73,10 @@ export enum ActionOpcode {
   REPAIR = 0x0C,   // immune: mend tape; neighbor quorum boosts success (same-org + partial foreign “kin” if lineage+signal+morph align)
   SPILL = 0x0D,    // spill local stomach content into nearby environment (1-hop redistribution)
   JAM = 0x0E,      // short-lived boundary disconnection against cross-lineage coupling
-  VENT = 0x0F,     // release local high-pressure cell energy into environment (self-only)
 }
 
 /** Highest defined `ActionOpcode` value (inclusive). Raw bytes above this are invalid until REPAIR or mutation. */
-export const MAX_VALID_ACTION_OPCODE = ActionOpcode.VENT;
+export const MAX_VALID_ACTION_OPCODE = ActionOpcode.JAM;
 export const ENERGY_CAP_MODULE_ORDER: readonly ActionOpcode[] = [
   ActionOpcode.DIV,
   ActionOpcode.DIGEST,
@@ -366,7 +365,6 @@ function opcodeDisasmName(op: ActionOpcode): string {
     case ActionOpcode.REPAIR: return 'REPAIR';
     case ActionOpcode.SPILL: return 'SPILL';
     case ActionOpcode.JAM: return 'JAM';
-    case ActionOpcode.VENT: return 'VENT';
     default: return `0x${Number(op).toString(16)}`;
   }
 }
