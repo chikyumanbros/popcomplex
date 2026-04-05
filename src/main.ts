@@ -3,7 +3,7 @@ import { createBuffers, writeUniform } from './gpu/buffers';
 import { createRenderPipeline } from './gpu/pipelines/render';
 import { World } from './simulation/world';
 import { OrganismManager } from './simulation/organism';
-import { createProtoTape } from './simulation/tape';
+import { ActionOpcode, createProtoTape } from './simulation/tape';
 import { RuleEvaluator } from './simulation/rule-evaluator';
 import { buildAIHandoffMarkdown, buildAIHandoffPrompt, type AIHandoffPromptPreset } from './simulation/ai-handoff';
 import { createUI, updateStats, type UIState } from './ui/controls';
@@ -357,6 +357,13 @@ function logWorldState(
       : 0;
   console.log(
     `[Selection] corr:${opts.telemetry.tapeCorruptions} wrRnd:${opts.telemetry.writeRandomizations} bitflip:${opts.telemetry.channelBitflips} swap:+${opts.telemetry.channelSwapsAccepted}/-${opts.telemetry.channelSwapsRejected} stillbirth:${opts.telemetry.stillbirths} repTry:${opts.telemetry.reproductionAttempts} repOk:${opts.telemetry.reproductionSuccess} repFailDom:${opts.telemetry.reproduceFailDominance} repFailCrowd:${opts.telemetry.reproduceFailCrowding} splitEv:${opts.telemetry.splitEvents} splitFrag:${opts.telemetry.splitFragments} splitFragMean:${splitMeanFragCells.toFixed(2)} split1cRatio:${splitSingletonRatio.toFixed(2)} splitKeepMean:${splitMeanLargestKept.toFixed(2)} xenoTry:${opts.telemetry.xenoTransferAttempts} xenoOk:${opts.telemetry.xenoTransferSuccess} xenoDriveMean:${xenoDriveMean.toFixed(4)} socialCohMean:${socialCohesionMean.toFixed(4)}`,
+  );
+  const spillExec = opts.telemetry.actionExec[ActionOpcode.SPILL] ?? 0;
+  const jamExec = opts.telemetry.actionExec[ActionOpcode.JAM] ?? 0;
+  const moveExec = opts.telemetry.actionExec[ActionOpcode.MOVE] ?? 0;
+  const fireExec = (opts.telemetry.actionExec[ActionOpcode.FIRE] ?? 0) + (opts.telemetry.actionExec[ActionOpcode.SIG] ?? 0);
+  console.log(
+    `[StressValidation] move:${moveExec} fire+sig:${fireExec} spill(vent):${spillExec} jam(exclusion):${jamExec} repFailDom:${opts.telemetry.reproduceFailDominance} repFailCrowd:${opts.telemetry.reproduceFailCrowding}`,
   );
   console.log(
     `[Top] ${orgDetails.slice(0, 5).join(' ')}${orgDetails.length > 5 ? '...' : ''}`,

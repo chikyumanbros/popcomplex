@@ -28,6 +28,26 @@ import {
   recordSplitEvent,
   recordXenoTransferAttempt,
 } from './telemetry';
+import { getActionCostForOpcode, MOVE_COST_PER_CELL, REPRODUCE_ACTION_COST } from './behaviors/action-costs';
+import { dispatchAction } from './behaviors/action-dispatch';
+import {
+  computeForeignContactPressure,
+  getCrowdingDissolveBonus,
+  getCrowdingReproduceFailChance,
+  getDistressFireChance,
+  getDominanceMetabolicMultiplier,
+  getDominanceReproduceFailChance,
+  getPerCellMetabolicBase,
+  getSplitCrowdExtraCooldown,
+  getSplitMinFragmentCells,
+  shouldTriggerDistressFire,
+} from './behaviors/stress-signals';
+import {
+  applyJamToForeignBoundary,
+  computeJamTtl,
+  countRepulsionFacesForShift,
+} from './behaviors/exclusion-actions';
+import { spillStomachToNearbyEnv } from './behaviors/vent-actions';
 
 const ORTH_DIRS: [number, number][] = [
   [0, -1],
@@ -56,19 +76,6 @@ function popcount24(v: number): number {
   return n;
 }
 
-// Action energy costs (heat → environment)
-const ACTION_COST_FIRE      = 0.4;
-const ACTION_COST_MOVE      = 0.5;
-const ACTION_COST_REPRODUCE = 5.0;
-const ACTION_COST_ABSORB    = 0.3;
-const ACTION_COST_DIGEST    = 0.2;
-const ACTION_COST_TAKE      = 0.1;
-const ACTION_COST_GIVE      = 0.05;
-const ACTION_COST_EMIT      = 0.15;
-const ACTION_COST_REPAIR    = 0.28;
-const ACTION_COST_SPILL     = 0.08;
-const ACTION_COST_JAM       = 0.06;
-
 // Tape REPAIR (immune): same-org neighbor quorum boosts success (collective error correction bias)
 const REPAIR_NEIGHBOR_COEFF = 0.16; // success mult += coeff * sameOrthogonalNeighbors (0..4)
 const REPAIR_BASE_P         = 0.36; // base success before bias × intensity
@@ -83,8 +90,6 @@ const KIN_GIVE_EXTRA_HEAT        = 0.2;    // mis-altruism waste scales with imp
 const REPAIR_FOREIGN_KIN_WEIGHT  = 0.4;    // foreign neighbor adds trust*this to repair quorum (capped trust above)
 
 // Structural constants (NOT evolvable — facts of physics)
-const BASE_METABOLIC          = 0.25;  // per cell base
-const CROWD_METABOLIC         = 0.008; // per cell per org-cell (density scaling)
 const ISOLATION_METABOLIC_PENALTY = 0.12; // isolated cell pays up to +12% metabolic vs well-connected tissue
 const PASSIVE_DIGEST_RATE     = 0.15;
 const DIGESTION_HEAT_LOSS     = 0.25;
@@ -103,8 +108,6 @@ const DIGEST_NETWORK_COEFF    = 0.32; // ratio 1.0 (4 same orth-neighbors) -> +3
  */
 const DIGEST_RULE_BOOST_CAP   = 1.0;
 const PASSIVE_ABSORB_RATE     = 0.15;
-const DISTRESS_FIRE_CHANCE    = 0.20;
-const DISTRESS_ENERGY_THRESH  = 3;
 
 /** Orthogonal contact with another organism: passive interface “tension” (energy → env, closed system). */
 const FOREIGN_INTERFACE_METABOLISM = 0.055;
@@ -131,32 +134,14 @@ const MIN_CELLS_TO_REPRODUCE  = 2;
 
 // Anti-monoculture: slow "rational apex" that tiles the whole grid
 const REPRODUCE_COOLDOWN_TICKS   = 40;   // min ticks between successful REPRODUCE per org
-const DOMINANCE_SHARE_SOFT       = 0.08; // above this: extra metabolic cost scales up
-const DOMINANCE_SHARE_REP        = 0.10; // above this: REPRODUCE randomly fails more often
-const DOMINANCE_METABOLIC_COEFF  = 5.5;  // mult += (share - soft) * this, capped
-const DOMINANCE_METABOLIC_CAP    = 2.4;
-const DOMINANCE_REP_FAIL_COEFF   = 2.2;  // failProb += (share - rep0) * this, capped
-const DOMINANCE_REP_FAIL_CAP     = 0.72;
 
 // Selection pressure: fragments do not amortize organism-level cost (real culling + fewer org spam)
 const ORG_OVERHEAD_PER_TICK      = 0.042; // each lineage pays this from its biomass → env (same for 1-cell or 72-cell)
-const REPRO_CROWD_START_ORGS     = 700;  // above this count, extra REPRO failure ramps up
-const REPRO_CROWD_FAIL_COEFF     = 0.00014; // fail chance += (nOrgs - start) * coeff, capped
-const REPRO_CROWD_FAIL_CAP       = 0.58;
-const DISSOLVE_CROWD_START       = 2500;  // more lineages → faster clear of energy-zero cells
-const DISSOLVE_CROWD_BONUS       = 0.000045; // added to base dissolve prob, capped
-const DISSOLVE_CROWD_CAP         = 0.045;
 const DISSOLVE_SINGLE_MULT       = 1.45;    // 1-cell orgs dissolve slightly faster when e<=0
 const DISSOLVE_BASE              = 0.016;
 
 // Connectivity pressure: split-born shards cannot reproduce immediately.
 const SPLIT_CHILD_EXTRA_COOLDOWN = 12;
-const SPLIT_MIN_FRAGMENT_CELLS   = 2;
-const SPLIT_CROWD_COOLDOWN_START_ORGS = 300;
-const SPLIT_CROWD_COOLDOWN_COEFF = 0.03; // extra cooldown += (orgs-start)*coeff, capped below
-const SPLIT_CROWD_COOLDOWN_CAP = 36;
-const SPLIT_CROWD_MIN_FRAGMENT_START_ORGS = 450;
-const SPLIT_CROWD_MIN_FRAGMENT_CELLS = 4;
 
 // Morphogen physics
 const MORPHOGEN_DIFFUSION     = 0.2;   // 20% spreads to each neighbor per tick
@@ -533,8 +518,8 @@ export class RuleEvaluator {
   // ==================== PER-CELL EVALUATION ====================
   // Returns true if the organism moved this tick (caller must re-snapshot)
   private evaluateCell(cell: CellCtx, org: Organism, tape: Tape): boolean {
-    const distressChance = Math.min(1, DISTRESS_FIRE_CHANCE * this.distressFireChanceScale);
-    if (cell.energy < DISTRESS_ENERGY_THRESH && randomF32() < distressChance) {
+    const distressChance = getDistressFireChance(this.distressFireChanceScale);
+    if (shouldTriggerDistressFire(cell.energy, distressChance, randomF32())) {
       this.actionFire(cell, org);
     }
 
@@ -564,7 +549,7 @@ export class RuleEvaluator {
 
       chainPassed = false;
 
-      const cost = this.getActionCost(rule.actionOpcode, org);
+      const cost = this.getActionCost(rule.actionOpcode);
       if (cell.energy < cost + 0.5) continue;
 
       const success = this.executeAction(rule, cell, org, tape);
@@ -658,116 +643,47 @@ export class RuleEvaluator {
     org.feedback[slot] = Math.min(255, Math.max(0, Math.round(value)));
   }
 
-  private executeAction(rule: ConditionRule, cell: CellCtx, org: Organism, tape: Tape): boolean {
-    const ctx = this.buildReadCtx(cell, org);
-    const mod = tape.readModifier(rule.actionParam, ctx);
-    switch (rule.actionOpcode) {
-      case ActionOpcode.EAT: {
-        const strength = mod / 255 * 5;
-        this.actionEat(cell, strength, org.cells.size);
-        this.world.bumpMarker(cell.idx, MARKER_EAT, MARKER_BUMP);
-        this.writeFeedback(org, 0, strength * 51); // scale to 0-255
-        return true;
-      }
-      case ActionOpcode.GIVE: {
-        const ok = this.actionGive(cell, mod / 255);
-        if (ok) this.writeFeedback(org, 3, mod);
-        return ok;
-      }
-      case ActionOpcode.TAKE: {
-        const ok = this.actionTake(cell, mod / 255 * 3);
-        if (ok) this.writeFeedback(org, 3, mod);
-        return ok;
-      }
-      case ActionOpcode.DIV: {
-        const ok = this.actionDivide(cell, org, tape, Math.max(10, mod));
-        if (ok) this.writeFeedback(org, 4, mod);
-        return ok;
-      }
-      case ActionOpcode.FIRE:
-      case ActionOpcode.SIG: {
-        if (!this.actionFire(cell, org)) return false;
-        this.world.bumpMarker(cell.idx, MARKER_SIGNAL, MARKER_BUMP);
-        this.writeFeedback(org, 5, this.envEnergy[cell.idx] * 25.5);
-        return true;
-      }
-      case ActionOpcode.MOVE: {
-        if (this.movedThisTick.has(org.id)) return false;
-        if (!this.actionMove(cell, org)) return false;
-        this.movedThisTick.add(org.id);
-        // sum env energy around new position for feedback
-        let envSum = 0;
-        for (const [dx, dy] of this.neighborDirs()) {
-          const nx = (cell.x + dx + GRID_WIDTH) % GRID_WIDTH;
-          const ny = (cell.y + dy + GRID_HEIGHT) % GRID_HEIGHT;
-          envSum += this.envEnergy[ny * GRID_WIDTH + nx];
-        }
-        this.writeFeedback(org, 6, Math.min(255, envSum * 12.75));
-        return true;
-      }
-      case ActionOpcode.REPRODUCE: {
-        const frac = Math.max(0.1, mod / 255 * 0.5);
-        const ok = this.actionReproduce(cell, org, tape, frac);
-        if (ok) this.writeFeedback(org, 7, Math.min(255, cell.energy * frac * 2.55));
-        return ok;
-      }
-      case ActionOpcode.ABSORB: {
-        if (!this.actionAbsorb(cell, Math.max(1, mod / 64))) return false;
-        this.world.bumpMarker(cell.idx, MARKER_EAT, MARKER_BUMP);
-        this.writeFeedback(org, 2, mod);
-        return true;
-      }
-      case ActionOpcode.DIGEST: {
-        const rate = mod / 255 * 0.6;
-        if (!this.actionDigest(cell, org, rate)) return false;
-        this.world.bumpMarker(cell.idx, MARKER_DIGEST, MARKER_BUMP);
-        this.writeFeedback(org, 1, mod);
-        return true;
-      }
-      case ActionOpcode.EMIT: {
-        this.actionEmit(cell, rule.actionParam, mod / 255 * 8);
-        this.world.bumpMarker(cell.idx, MARKER_SIGNAL, MARKER_BUMP);
-        return true;
-      }
-      case ActionOpcode.REPAIR: {
-        if (!this.actionRepair(cell, org, tape, mod / 255 * 0.7)) return false;
-        this.world.bumpMarker(cell.idx, MARKER_SIGNAL, MARKER_BUMP);
-        this.writeFeedback(org, 1, Math.min(255, REPAIR_DEG_HEAL + mod / 4));
-        return true;
-      }
-      case ActionOpcode.SPILL: {
-        const amount = mod / 255 * 0.8; // low-strength local redistribution
-        const ok = this.actionSpill(cell, amount);
-        if (ok) this.writeFeedback(org, 2, mod);
-        return ok;
-      }
-      case ActionOpcode.JAM: {
-        const intensity = mod / 255;
-        const ok = this.actionJam(cell, intensity);
-        if (ok) this.writeFeedback(org, 5, mod);
-        return ok;
-      }
-      default:
-        return false;
+  private collectNeighborEnvSum(cell: CellCtx): number {
+    let envSum = 0;
+    for (const [dx, dy] of this.neighborDirs()) {
+      const nx = (cell.x + dx + GRID_WIDTH) % GRID_WIDTH;
+      const ny = (cell.y + dy + GRID_HEIGHT) % GRID_HEIGHT;
+      envSum += this.envEnergy[ny * GRID_WIDTH + nx];
     }
+    return envSum;
   }
 
-  private getActionCost(opcode: ActionOpcode, _org: Organism): number {
-    switch (opcode) {
-      case ActionOpcode.FIRE:      return ACTION_COST_FIRE;
-      case ActionOpcode.SIG:       return ACTION_COST_FIRE;
-      case ActionOpcode.MOVE:      return 0; // cost handled by distributeMoveCost
-      case ActionOpcode.REPRODUCE: return 0; // cost handled internally
-      case ActionOpcode.ABSORB:    return ACTION_COST_ABSORB;
-      case ActionOpcode.DIGEST:    return ACTION_COST_DIGEST;
-      case ActionOpcode.TAKE:      return ACTION_COST_TAKE;
-      case ActionOpcode.GIVE:      return ACTION_COST_GIVE;
-      case ActionOpcode.EMIT:      return ACTION_COST_EMIT;
-      case ActionOpcode.REPAIR:    return ACTION_COST_REPAIR;
-      case ActionOpcode.SPILL:     return ACTION_COST_SPILL;
-      case ActionOpcode.JAM:       return ACTION_COST_JAM;
-      default:                     return 0;
-    }
+  private executeAction(rule: ConditionRule, cell: CellCtx, org: Organism, tape: Tape): boolean {
+    return dispatchAction(rule, cell, org, tape, {
+      movedThisTick: this.movedThisTick,
+      markers: {
+        eat: MARKER_EAT,
+        digest: MARKER_DIGEST,
+        signal: MARKER_SIGNAL,
+        bump: MARKER_BUMP,
+      },
+      buildReadCtx: (c, o) => this.buildReadCtx(c, o),
+      writeFeedback: (o, slot, value) => this.writeFeedback(o, slot, value),
+      bumpMarker: (idx, marker, amount) => this.world.bumpMarker(idx, marker, amount),
+      collectNeighborEnvSum: (c) => this.collectNeighborEnvSum(c),
+      actionEat: (c, strength, orgCellCount) => this.actionEat(c, strength, orgCellCount),
+      actionGive: (c, intensity01) => this.actionGive(c, intensity01),
+      actionTake: (c, intensity) => this.actionTake(c, intensity),
+      actionDivide: (c, o, t, minEnergy) => this.actionDivide(c, o, t, minEnergy),
+      actionFire: (c, o) => this.actionFire(c, o),
+      actionMove: (c, o) => this.actionMove(c, o),
+      actionReproduce: (c, o, t, frac) => this.actionReproduce(c, o, t, frac),
+      actionAbsorb: (c, maxSteal) => this.actionAbsorb(c, maxSteal),
+      actionDigest: (c, o, rate) => this.actionDigest(c, o, rate),
+      actionEmit: (c, actionParam, amount) => this.actionEmit(c, actionParam, amount),
+      actionRepair: (c, o, t, intensity) => this.actionRepair(c, o, t, intensity),
+      actionSpill: (c, amount) => this.actionSpill(c, amount),
+      actionJam: (c, intensity) => this.actionJam(c, intensity),
+    });
+  }
+
+  private getActionCost(opcode: ActionOpcode): number {
+    return getActionCostForOpcode(opcode);
   }
 
   // ==================== ACTIONS ====================
@@ -1066,7 +982,7 @@ export class RuleEvaluator {
       const { foreignFaces, edgeFaces } = this.countRepulsionFacesIfOrgShifted(org, dx, dy);
       score -= MOVE_REPEL_FOREIGN_FACE * foreignFaces + MOVE_REPEL_MAP_EDGE_FACE * edgeFaces;
       if (dx !== 0 && dy !== 0) {
-        score -= ACTION_COST_MOVE * DIAGONAL_MOVE_COST_MULT * org.cells.size;
+        score -= MOVE_COST_PER_CELL * DIAGONAL_MOVE_COST_MULT * org.cells.size;
       }
       // slight random exploration scaled by NN move urgency
       score += (randomF32() - 0.3) * org.nnOutput[NN_MOVE] * 20;
@@ -1087,7 +1003,7 @@ export class RuleEvaluator {
     const moveMult = dx !== 0 && dy !== 0 ? DIAGONAL_MOVE_COST_MULT : 1;
     for (const idx of org.cells) {
       const e = this.world.getCellEnergyByIdx(idx);
-      const cost = Math.min(e, ACTION_COST_MOVE * moveMult);
+      const cost = Math.min(e, MOVE_COST_PER_CELL * moveMult);
       this.setCellEnergyCappedByIdx(idx, e - cost, org.id);
       this.envEnergy[idx] += cost;
     }
@@ -1098,28 +1014,22 @@ export class RuleEvaluator {
     if (org.cells.size < MIN_CELLS_TO_REPRODUCE) return false;
     if (org.reproduceCooldown > 0) return false;
     const share = org.cells.size / this.dominanceLiveCellCount;
-    if (this.suppressionMode === 'on' && share > DOMINANCE_SHARE_REP) {
-      const failP = Math.min(
-        DOMINANCE_REP_FAIL_CAP,
-        (share - DOMINANCE_SHARE_REP) * DOMINANCE_REP_FAIL_COEFF,
-      );
-      if (randomF32() < failP) {
+    const dominanceFailChance = getDominanceReproduceFailChance(share, this.suppressionMode === 'on');
+    if (dominanceFailChance > 0) {
+      if (randomF32() < dominanceFailChance) {
         recordReproduceFailDominance();
         return false;
       }
     }
     const nOrgs = this.organisms.count;
-    if (this.suppressionMode === 'on' && nOrgs > REPRO_CROWD_START_ORGS) {
-      const crowdFail = Math.min(
-        REPRO_CROWD_FAIL_CAP,
-        (nOrgs - REPRO_CROWD_START_ORGS) * REPRO_CROWD_FAIL_COEFF,
-      );
-      if (randomF32() < crowdFail) {
+    const crowdFailChance = getCrowdingReproduceFailChance(nOrgs, this.suppressionMode === 'on');
+    if (crowdFailChance > 0) {
+      if (randomF32() < crowdFailChance) {
         recordReproduceFailCrowding();
         return false;
       }
     }
-    const minRequired = ACTION_COST_REPRODUCE + 1;
+    const minRequired = REPRODUCE_ACTION_COST + 1;
     if (cell.energy < minRequired) return false;
     for (const [dx, dy] of ORTH_DIRS) {
       const nx = cell.x + dx, ny = cell.y + dy;
@@ -1127,7 +1037,7 @@ export class RuleEvaluator {
       const childTape = transcribeForReproduction(org.tape);
       if (!childTape) {
         const e = cell.energy;
-        const pay = Math.min(e, ACTION_COST_REPRODUCE);
+        const pay = Math.min(e, REPRODUCE_ACTION_COST);
         cell.energy = e - pay;
         cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
         this.envEnergy[cell.idx] += pay;
@@ -1135,16 +1045,16 @@ export class RuleEvaluator {
         return false;
       }
       const childId = this.world.nextOrganismId++;
-      const budget = cell.energy - ACTION_COST_REPRODUCE;
+      const budget = cell.energy - REPRODUCE_ACTION_COST;
       const childE = budget * childFraction;
       this.organisms.register(childId, childTape, { parentId: org.id, birthTick: this.simTick });
       const childCap = this.safeCellEnergyCapForOrg(childId);
       const childStored = Math.min(childE, childCap);
       const childOverflow = Math.max(0, childE - childStored);
       this.world.setCell(nx, ny, childId, CellType.Stem, childStored, childTape.getLineagePacked());
-      cell.energy -= (childE + ACTION_COST_REPRODUCE);
+      cell.energy -= childE + REPRODUCE_ACTION_COST;
       cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
-      this.envEnergy[cell.idx] += ACTION_COST_REPRODUCE + childOverflow;
+      this.envEnergy[cell.idx] += REPRODUCE_ACTION_COST + childOverflow;
       const childOrg = this.organisms.get(childId);
       if (childOrg) childOrg.cells.add(ny * GRID_WIDTH + nx);
       org.reproduceCooldown = REPRODUCE_COOLDOWN_TICKS;
@@ -1198,48 +1108,30 @@ export class RuleEvaluator {
 
   /** Spill a small amount of own stomach into local environment (self + orthogonal neighbors). */
   private actionSpill(cell: CellCtx, amount: number): boolean {
-    const stomach = this.world.getStomachByIdx(cell.idx);
-    const spill = Math.min(stomach, Math.max(0, amount));
-    if (spill < 0.01) return false;
-
-    this.world.setStomachByIdx(cell.idx, stomach - spill);
-    const selfShare = spill * 0.5;
-    let nbShare = spill - selfShare;
-    this.envEnergy[cell.idx] += selfShare;
-
-    const neighbors: number[] = [];
-    for (const [dx, dy] of ORTH_DIRS) {
-      const nx = cell.x + dx;
-      const ny = cell.y + dy;
-      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
-      neighbors.push(ny * GRID_WIDTH + nx);
-    }
-    if (neighbors.length === 0) {
-      this.envEnergy[cell.idx] += nbShare;
-      return true;
-    }
-    const per = nbShare / neighbors.length;
-    for (const nIdx of neighbors) this.envEnergy[nIdx] += per;
-    return true;
+    return spillStomachToNearbyEnv(
+      cell,
+      amount,
+      (idx) => this.world.getStomachByIdx(idx),
+      (idx, value) => this.world.setStomachByIdx(idx, value),
+      (idx, delta) => {
+        this.envEnergy[idx] += delta;
+      },
+      GRID_WIDTH,
+      GRID_HEIGHT,
+    );
   }
 
   /** Defensive cut: short-lived jam at foreign boundary edges around this cell. */
   private actionJam(cell: CellCtx, intensity: number): boolean {
-    const extra = Math.round(Math.max(0, Math.min(1, intensity)) * JAM_MAX_EXTRA_TICKS);
-    const ttl = JAM_MIN_TICKS + extra;
-    let applied = false;
-    for (const [dx, dy] of ORTH_DIRS) {
-      const nx = cell.x + dx;
-      const ny = cell.y + dy;
-      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
-      const nIdx = ny * GRID_WIDTH + nx;
-      const nOrg = this.world.getOrganismIdByIdx(nIdx);
-      if (nOrg === 0 || nOrg === cell.orgId) continue;
-      this.markJammed(cell.idx, ttl);
-      this.markJammed(nIdx, ttl);
-      applied = true;
-    }
-    return applied;
+    const ttl = computeJamTtl(intensity, JAM_MIN_TICKS, JAM_MAX_EXTRA_TICKS);
+    return applyJamToForeignBoundary(
+      cell,
+      ttl,
+      (idx) => this.world.getOrganismIdByIdx(idx),
+      (idx, jamTtl) => this.markJammed(idx, jamTtl),
+      GRID_WIDTH,
+      GRID_HEIGHT,
+    );
   }
 
   private markJammed(idx: number, ttl: number): void {
@@ -1303,19 +1195,12 @@ export class RuleEvaluator {
 
   /** 0..1: foreign-face share among occupied orthogonal neighbors around host cell. */
   private foreignContactPressure(cell: CellCtx): number {
-    let occupied = 0;
-    let foreign = 0;
-    for (const [dx, dy] of ORTH_DIRS) {
-      const nx = cell.x + dx;
-      const ny = cell.y + dy;
-      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
-      const nOrg = this.world.getOrganismId(nx, ny);
-      if (nOrg === 0) continue;
-      occupied++;
-      if (nOrg !== cell.orgId) foreign++;
-    }
-    if (occupied === 0) return 0;
-    return foreign / occupied;
+    return computeForeignContactPressure(
+      cell,
+      (x, y) => this.world.getOrganismId(x, y),
+      GRID_WIDTH,
+      GRID_HEIGHT,
+    );
   }
 
   // ==================== MORPHOGEN DIFFUSION ====================
@@ -1390,18 +1275,8 @@ export class RuleEvaluator {
 
     for (const org of this.organisms.organisms.values()) {
       const share = org.cells.size / liveN;
-      const dominanceMult =
-        this.suppressionMode === 'on'
-          ? 1 +
-            Math.min(
-              DOMINANCE_METABOLIC_CAP - 1,
-              Math.max(0, share - DOMINANCE_SHARE_SOFT) * DOMINANCE_METABOLIC_COEFF,
-            )
-          : 1;
-      const perCell =
-        (BASE_METABOLIC + CROWD_METABOLIC * Math.sqrt(org.cells.size)) *
-        dominanceMult *
-        this.metabolicScale;
+      const dominanceMult = getDominanceMetabolicMultiplier(share, this.suppressionMode === 'on');
+      const perCell = getPerCellMetabolicBase(org.cells.size, dominanceMult, this.metabolicScale);
       for (const idx of org.cells) {
         const sameRatio = this.sameOrgOrthNeighborRatioByIdx(idx, org.id);
         const isolationMult = 1 + ISOLATION_METABOLIC_PENALTY * (1 - sameRatio);
@@ -1443,10 +1318,7 @@ export class RuleEvaluator {
   // ==================== CLEANUP ====================
   cleanupDeadOrganisms() {
     const nOrgs = this.organisms.count;
-    const crowdDiss =
-      this.suppressionMode === 'on' && nOrgs > DISSOLVE_CROWD_START
-        ? Math.min(DISSOLVE_CROWD_CAP, (nOrgs - DISSOLVE_CROWD_START) * DISSOLVE_CROWD_BONUS)
-        : 0;
+    const crowdDiss = getCrowdingDissolveBonus(nOrgs, this.suppressionMode === 'on');
     const baseDiss = DISSOLVE_BASE + crowdDiss;
 
     const dead: number[] = [];
@@ -1483,10 +1355,7 @@ export class RuleEvaluator {
 
     for (const { org, components } of toSplit) {
       components.sort((a, b) => b.length - a.length);
-      const minFragCells =
-        this.suppressionMode === 'on' && this.organisms.count >= SPLIT_CROWD_MIN_FRAGMENT_START_ORGS
-          ? SPLIT_CROWD_MIN_FRAGMENT_CELLS
-          : SPLIT_MIN_FRAGMENT_CELLS;
+      const minFragCells = getSplitMinFragmentCells(this.organisms.count, this.suppressionMode === 'on');
       const keepWithParent = [...components[0]];
       const splitFrags: number[][] = [];
       for (let i = 1; i < components.length; i++) {
@@ -1510,13 +1379,7 @@ export class RuleEvaluator {
         const childTape = org.tape.clone();
         this.organisms.register(newId, childTape, { parentId: org.id, birthTick: this.simTick });
         const newOrg = this.organisms.get(newId)!;
-        const splitCrowdExtra =
-          this.suppressionMode === 'on' && this.organisms.count > SPLIT_CROWD_COOLDOWN_START_ORGS
-            ? Math.min(
-                SPLIT_CROWD_COOLDOWN_CAP,
-                (this.organisms.count - SPLIT_CROWD_COOLDOWN_START_ORGS) * SPLIT_CROWD_COOLDOWN_COEFF,
-              )
-            : 0;
+        const splitCrowdExtra = getSplitCrowdExtraCooldown(this.organisms.count, this.suppressionMode === 'on');
         newOrg.reproduceCooldown = Math.round(
           Math.max(
             newOrg.reproduceCooldown,
@@ -1754,30 +1617,16 @@ export class RuleEvaluator {
     dx: number,
     dy: number,
   ): { foreignFaces: number; edgeFaces: number } {
-    const shifted = new Set<number>();
-    for (const idx of org.cells) {
-      const x = idx % GRID_WIDTH + dx;
-      const y = ((idx - idx % GRID_WIDTH) / GRID_WIDTH) + dy;
-      shifted.add(y * GRID_WIDTH + x);
-    }
-    let foreignFaces = 0;
-    let edgeFaces = 0;
-    for (const idx of shifted) {
-      const x = idx % GRID_WIDTH, y = (idx - x) / GRID_WIDTH;
-      for (const [ox, oy] of ORTH_DIRS) {
-        const nx = x + ox, ny = y + oy;
-        if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) {
-          edgeFaces++;
-          continue;
-        }
-        const ni = ny * GRID_WIDTH + nx;
-        if (shifted.has(ni)) continue;
-        if (this.world.getCellTypeByIdx(ni) === CellType.Empty) continue;
-        const nOrg = this.world.getOrganismIdByIdx(ni);
-        if (nOrg !== 0 && nOrg !== org.id) foreignFaces++;
-      }
-    }
-    return { foreignFaces, edgeFaces };
+    return countRepulsionFacesForShift(
+      org.cells,
+      org.id,
+      dx,
+      dy,
+      (idx) => this.world.getCellTypeByIdx(idx),
+      (idx) => this.world.getOrganismIdByIdx(idx),
+      GRID_WIDTH,
+      GRID_HEIGHT,
+    );
   }
 
   private applyForeignInterfaceMetabolism(idx: number, orgId: number) {
