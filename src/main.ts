@@ -99,6 +99,11 @@ async function main() {
 
   let lastChartPopForLog: PopulationMetrics | null = null;
   let lastChartSampleTick = -1;
+  
+  // Frame rate limiting (optional: set to 0 for unlimited, or e.g. 60 for 60fps cap)
+  const TARGET_FPS = 0; // 0 = unlimited
+  const FRAME_MIN_MS = TARGET_FPS > 0 ? 1000 / TARGET_FPS : 0;
+  let lastFrameTime = performance.now();
 
   if (ecologyChart) {
     const pop0 = measurePopulationMetrics(world, organisms);
@@ -153,6 +158,17 @@ async function main() {
 
   function frame() {
     requestAnimationFrame(frame);
+    
+    // Frame rate limiting
+    if (FRAME_MIN_MS > 0) {
+      const now = performance.now();
+      const elapsed = now - lastFrameTime;
+      if (elapsed < FRAME_MIN_MS) {
+        return; // Skip this frame
+      }
+      lastFrameTime = now;
+    }
+    
     stats.recordFrame();
     frameCount++;
 
