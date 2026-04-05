@@ -5,6 +5,7 @@ import {
   MAX_RULES,
   MAX_VALID_ACTION_OPCODE,
   RULE_SIZE,
+  STOMACH_CAP_BASE,
   TAPE_SIZE,
   type ConditionRule,
   type Tape,
@@ -283,6 +284,28 @@ export class RuleEvaluator {
     }
   }
 
+  private safeStomachCapForOrg(orgId: number): number {
+    if (orgId <= 0) return STOMACH_CAP_BASE;
+    const org = this.organisms.get(orgId);
+    if (!org) return STOMACH_CAP_BASE;
+    const cap = org.tape.getMaxStomach();
+    if (!Number.isFinite(cap) || cap <= 0) return STOMACH_CAP_BASE;
+    return cap;
+  }
+
+  /** When tape modules break, gut cap drops; spill excess stomach to local env (closed budget). */
+  private enforcePerCellStomachCaps() {
+    for (let idx = 0; idx < TOTAL_CELLS; idx++) {
+      const orgId = this.world.getOrganismIdByIdx(idx);
+      if (orgId === 0) continue;
+      const s = this.world.getStomachByIdx(idx);
+      const cap = this.safeStomachCapForOrg(orgId);
+      if (s <= cap) continue;
+      this.world.setStomachByIdx(idx, cap);
+      this.envEnergy[idx] += (s - cap);
+    }
+  }
+
   setEnvEnergy(data: Float32Array) {
     this.envEnergy.set(data);
     let s = 0;
@@ -480,6 +503,7 @@ export class RuleEvaluator {
     this.movedThisTick.clear();
     this.digestRuleBoost.fill(0);
     this.enforcePerCellEnergyCaps();
+    this.enforcePerCellStomachCaps();
 
     // Phase 1: passive absorption, marker decay, feedback decay for ALL cells
     for (const org of this.organisms.organisms.values()) {
@@ -715,6 +739,19 @@ export class RuleEvaluator {
     return getActionCostForOpcode(opcode);
   }
 
+  /** Add non-negative stomach inflow; overflow spills to this cell’s env (preserves closed energy budget). */
+  private stomachInflow(idx: number, amount: number) {
+    if (amount < 1e-8) return;
+    const orgId = this.world.getOrganismIdByIdx(idx);
+    const cap = this.safeStomachCapForOrg(orgId);
+    const s = this.world.getStomachByIdx(idx);
+    const next = s + amount;
+    const stored = Math.min(cap, next);
+    this.world.setStomachByIdx(idx, stored);
+    const spill = next - stored;
+    if (spill > 1e-8) this.envEnergy[idx] += spill;
+  }
+
   // ==================== ACTIONS ====================
 
   private passiveAbsorb(cell: CellCtx, orgSize = 1) {
@@ -724,8 +761,7 @@ export class RuleEvaluator {
     const take = Math.min(avail * 0.05, PASSIVE_ABSORB_RATE) * coordination;
     if (take < 0.001) return;
     this.envEnergy[cell.idx] -= take;
-    const stomach = this.world.getStomachByIdx(cell.idx);
-    this.world.setStomachByIdx(cell.idx, stomach + take);
+    this.stomachInflow(cell.idx, take);
   }
 
   private actionEat(cell: CellCtx, maxGather: number, orgSize = 1) {
@@ -750,8 +786,7 @@ export class RuleEvaluator {
       if (gathered >= maxEat) break;
     }
     if (gathered > 0) {
-      const stomach = this.world.getStomachByIdx(cell.idx);
-      this.world.setStomachByIdx(cell.idx, stomach + gathered);
+      this.stomachInflow(cell.idx, gathered);
     }
   }
 
@@ -759,7 +794,8 @@ export class RuleEvaluator {
    * DIGEST opcode: no immediate transfer — raises this cell’s digest boost for the single `digestPhase` pass
    * (own stomach only; order of rules does not change final boost — each add is clamped to the same cap).
    */
-  private actionDigest(cell: CellCtx, _org: Organism, rate: number): boolean {
+  private actionDigest(cell: CellCtx, org: Organism, rate: number): boolean {
+    if (!org.tape.isDigestModuleIntact()) return false;
     const own = this.world.getStomachByIdx(cell.idx);
     if (own < 0.01) return false;
     if (this.digestRuleBoost[cell.idx] >= DIGEST_RULE_BOOST_CAP - 1e-8) return false;
@@ -1131,8 +1167,7 @@ export class RuleEvaluator {
       const steal = Math.min(ne, maxSteal);
       if (steal <= 0) continue;
       this.setCellEnergyCapped(nx, ny, ne - steal, nOrg);
-      const stomach = this.world.getStomachByIdx(cell.idx);
-      this.world.setStomachByIdx(cell.idx, stomach + steal);
+      this.stomachInflow(cell.idx, steal);
       this.tryHorizontalTapeTransfer(cell, nIdx, nOrg, steal, maxSteal);
       return true;
     }
@@ -1286,8 +1321,10 @@ export class RuleEvaluator {
 
   // ==================== DIGESTION (single pipeline per tick) ====================
   // Stomach → this cell’s energy + heat to env. DIGEST opcode only pre-fills digestRuleBoost (capped); see DIGEST_RULE_BOOST_CAP.
+  // Requires tape `isDigestModuleIntact()` (energy-cap bank DIGEST slot); otherwise gut content is inert until REPAIR.
   digestPhase() {
     for (const org of this.organisms.organisms.values()) {
+      if (!org.tape.isDigestModuleIntact()) continue;
       for (const idx of org.cells) {
         const stomach = this.world.getStomachByIdx(idx);
         if (stomach < 0.01) continue;

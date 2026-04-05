@@ -10,7 +10,7 @@ export const TAPE_SNAPSHOT_BYTES = TAPE_SIZE * 2;
  * Tape layout (`data` is 256 bytes; `degradation` mirrors each index):
  * - **0–31** — Data region: operation nodes 0–15, literal pool 16–31; **byte 4** = maxCells (structural).
  * - **28–30** — Lineage pigment (evolvable); **31** = lineage aux (mixed into `getLineagePacked` 24-bit tag).
- * - **32–63** — CA band: refractory = low nibble of 32; **48–59** = energy storage code bank; **60–63** replication key.
+ * - **32–63** — CA band: refractory = low nibble of 32; **48–59** = module bank: **all 12** slots count toward **cell energy cap**; **DIGEST/EAT/ABSORB/TAKE** slots (see `STOMACH_CAPACITY_BANK_SLOT_INDICES`) count toward **stomach cap** only; slot **49** = DIGEST — must match code for stomach→energy digestion; **60–63** replication key.
  * - **64–127** — Condition→action rules: 16 slots × 4 bytes (flags, threshold, opcode, actionParam node index).
  * - **128–255** — NN parameters (pairs of bytes → float; see `getNNWeights`).
  *
@@ -91,6 +91,32 @@ export const ENERGY_CAP_MODULE_ORDER: readonly ActionOpcode[] = [
   ActionOpcode.EMIT,
   ActionOpcode.REPAIR,
 ];
+
+/** Byte `ENERGY_CAP_BANK_OFFSET + this` must match `energyCapModuleCode(DIGEST)` or stomach→energy digestion is disabled. */
+export const ENERGY_CAP_DIGEST_MODULE_INDEX = 1;
+
+/**
+ * Which bank slots contribute to **stomach buffer** max (orthogonal to `getMaxCellEnergy()`, which uses every slot).
+ * Ingestion / coupling / pull — not the whole organelle set.
+ */
+export const STOMACH_CAPACITY_BANK_OPCODES: readonly ActionOpcode[] = [
+  ActionOpcode.DIGEST,
+  ActionOpcode.EAT,
+  ActionOpcode.ABSORB,
+  ActionOpcode.TAKE,
+] as const;
+
+export const STOMACH_CAPACITY_BANK_SLOT_INDICES: readonly number[] = STOMACH_CAPACITY_BANK_OPCODES.map((op) => {
+  const i = ENERGY_CAP_MODULE_ORDER.indexOf(op);
+  if (i < 0) throw new Error(`STOMACH_CAPACITY_BANK_OPCODES: missing ${op} in ENERGY_CAP_MODULE_ORDER`);
+  return i;
+});
+
+/** Gut cap = base + (surviving gut slots above) × per-module; four slots intact → `STOMACH_CAP_MAX`. */
+export const STOMACH_CAP_BASE = 8;
+export const STOMACH_CAP_PER_MODULE = 14;
+export const STOMACH_CAP_MAX = 64;
+
 const ENERGY_CAP_MODULE_CODE_XOR = 0xA5;
 
 function energyCapModuleCode(op: ActionOpcode): number {
@@ -218,18 +244,46 @@ export class Tape {
    *   If the byte equals that module's expected code, the module is "surviving"; otherwise broken/empty.
    *
    * Capacity = ENERGY_CAP_BASE + survivingModules * ENERGY_CAP_PER_MODULE (capped at ENERGY_CAP_MAX).
+   * Stomach buffer uses a **subset** of slots; see `getMaxStomach()` and `STOMACH_CAPACITY_BANK_SLOT_INDICES`.
    * Runtime combines this with "recently functioning" modules in `RuleEvaluator`.
    */
-  getMaxCellEnergy(): number {
+  private countSurvivingEnergyCapModules(): number {
     let surviving = 0;
+    for (let m = this.getSurvivingEnergyModuleMask(); m !== 0; m &= m - 1) surviving++;
+    return surviving;
+  }
+
+  private countSurvivingStomachCapModules(): number {
     const mask = this.getSurvivingEnergyModuleMask();
-    let m = mask;
-    while (m !== 0) {
-      surviving++;
-      m &= m - 1;
+    let n = 0;
+    for (const i of STOMACH_CAPACITY_BANK_SLOT_INDICES) {
+      if (mask & (1 << i)) n++;
     }
+    return n;
+  }
+
+  getMaxCellEnergy(): number {
+    const surviving = this.countSurvivingEnergyCapModules();
     const cap = ENERGY_CAP_BASE + surviving * ENERGY_CAP_PER_MODULE;
     return Math.min(ENERGY_CAP_MAX, cap);
+  }
+
+  /**
+   * Max digest buffer per cell from **gut-related** bank slots only (`STOMACH_CAPACITY_BANK_SLOT_INDICES`),
+   * not the same count as `getMaxCellEnergy()`.
+   */
+  getMaxStomach(): number {
+    const surviving = this.countSurvivingStomachCapModules();
+    const cap = STOMACH_CAP_BASE + surviving * STOMACH_CAP_PER_MODULE;
+    return Math.min(STOMACH_CAP_MAX, cap);
+  }
+
+  /** False when the DIGEST capacity slot is corrupt — no passive digestion or DIGEST-opcode boost (EAT/SPILL still fill or empty the gut). */
+  isDigestModuleIntact(): boolean {
+    const i = ENERGY_CAP_DIGEST_MODULE_INDEX;
+    const expected = energyCapModuleCode(ENERGY_CAP_MODULE_ORDER[i]!);
+    const actual = this.data[ENERGY_CAP_BANK_OFFSET + i] & 0xff;
+    return actual === expected;
   }
 
   /** Bit i is 1 when energy-cap module slot i still has its canonical code (surviving). */
