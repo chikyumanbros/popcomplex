@@ -108,6 +108,10 @@ const DIGEST_NETWORK_COEFF    = 0.32; // ratio 1.0 (4 same orth-neighbors) -> +3
  */
 const DIGEST_RULE_BOOST_CAP   = 1.0;
 const PASSIVE_ABSORB_RATE     = 0.15;
+// Rule-table scan tax: tiny universal scan cost + extra penalty for dead rows.
+const SCAN_TAX_ALL            = 0.00005;
+const SCAN_TAX_NOP_EXTRA      = 0.00035;
+const SCAN_TAX_INVALID_EXTRA  = 0.00100;
 
 /** Orthogonal contact with another organism: passive interface “tension” (energy → env, closed system). */
 const FOREIGN_INTERFACE_METABOLISM = 0.055;
@@ -538,6 +542,8 @@ export class RuleEvaluator {
     const startRule = (this.simTick + cell.idx + org.id) % ruleCount;
     for (let ro = 0; ro < ruleCount; ro++) {
       const r = (startRule + ro) % ruleCount;
+      const rawOpcode = tape.data[CONDITIONS_OFFSET + r * RULE_SIZE + 2] & 0xff;
+      this.payRuleScanTax(cell, rawOpcode);
       const rule = tape.getRule(r);
       if (rule.actionOpcode === ActionOpcode.NOP) { chainPassed = false; continue; }
 
@@ -573,6 +579,20 @@ export class RuleEvaluator {
       }
     }
     return false;
+  }
+
+  private payRuleScanTax(cell: CellCtx, rawOpcode: number) {
+    let tax = SCAN_TAX_ALL;
+    if (rawOpcode === ActionOpcode.NOP) {
+      tax += SCAN_TAX_NOP_EXTRA;
+    } else if (rawOpcode > MAX_VALID_ACTION_OPCODE) {
+      tax += SCAN_TAX_INVALID_EXTRA;
+    }
+    const paid = Math.min(cell.energy, tax);
+    if (paid <= 0) return;
+    cell.energy -= paid;
+    cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
+    this.envEnergy[cell.idx] += paid;
   }
 
   // ==================== CONDITION EVALUATION ====================
