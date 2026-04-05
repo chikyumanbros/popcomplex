@@ -1,4 +1,8 @@
 import { GRID_WIDTH, GRID_HEIGHT } from '../simulation/constants';
+import {
+  reloadPageWithRandomSeed,
+  reloadPageWithSeed,
+} from '../simulation/runtime-config';
 
 /** Fragment shader visualization mode (`render.wgsl`); cycle with V. */
 export const VIEW_MODE_COUNT = 6;
@@ -78,7 +82,7 @@ function clientToGrid(
   state.mouseGridY = gy;
 }
 
-export function createUI(canvas: HTMLCanvasElement): UIState {
+export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIState {
   const state: UIState = {
     paused: true,
     speed: 1,
@@ -100,6 +104,11 @@ export function createUI(canvas: HTMLCanvasElement): UIState {
       <label>Speed: <input id="speed" type="range" min="1" max="20" value="1"><span id="speed-val"> 1</span></label>
     </div>
     <div class="control-row">
+      <label title="Unsigned 32-bit; applied on reload">Seed:
+        <input id="run-seed" type="number" inputmode="numeric" value="${initialSeed}" style="width:6.5rem">
+      </label>
+      <button id="btn-seed-apply" type="button" title="Set ?seed= in the address bar and reload">Apply seed</button>
+      <button id="btn-seed-random" type="button" title="Pick a random seed and reload">Random seed</button>
       <button id="btn-restart" type="button" title="Reload page; keeps current URL query (same seed / multiOrigin / etc.)">Restart</button>
       <button id="btn-ai-handoff" type="button" title="Copy markdown report for AI / debugging">Copy AI report</button>
     </div>
@@ -145,6 +154,23 @@ export function createUI(canvas: HTMLCanvasElement): UIState {
   document.getElementById('speed')!.addEventListener('input', (e) => {
     state.speed = parseInt((e.target as HTMLInputElement).value);
     document.getElementById('speed-val')!.textContent = String(state.speed).padStart(2, ' ');
+  });
+
+  const seedInput = document.getElementById('run-seed') as HTMLInputElement;
+
+  function applySeedFromInput(): void {
+    reloadPageWithSeed(Number(seedInput.value));
+  }
+
+  document.getElementById('btn-seed-apply')!.addEventListener('click', applySeedFromInput);
+  document.getElementById('btn-seed-random')!.addEventListener('click', () => {
+    reloadPageWithRandomSeed();
+  });
+  seedInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      applySeedFromInput();
+    }
   });
 
   document.getElementById('btn-restart')!.addEventListener('click', () => {

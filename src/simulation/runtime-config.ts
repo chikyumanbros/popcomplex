@@ -47,11 +47,31 @@ function parseQueryFlag(v: string | null, fallback: boolean): boolean {
   return fallback;
 }
 
+/** Same normalization as URL `seed=` parsing (unsigned 32-bit). */
+export function normalizeRuntimeSeed(n: number): number {
+  return Number.isFinite(n) ? (Math.trunc(n) >>> 0) : DEFAULT_RUNTIME_SEED;
+}
+
+/** Update `?seed=` on the current URL and reload; other query params are kept. */
+export function reloadPageWithSeed(seed: number): void {
+  const s = normalizeRuntimeSeed(seed);
+  const url = new URL(window.location.href);
+  url.searchParams.set('seed', String(s));
+  window.location.assign(url.toString());
+}
+
+/** Random 32-bit seed via `crypto`, then same as `reloadPageWithSeed`. */
+export function reloadPageWithRandomSeed(): void {
+  const u = new Uint32Array(1);
+  crypto.getRandomValues(u);
+  reloadPageWithSeed(u[0]!);
+}
+
 export function readRuntimeConfigFromUrl(): RuntimeConfig {
   const qs = new URLSearchParams(window.location.search);
   const seedRaw = qs.get('seed');
   const seedNum = seedRaw !== null ? Number(seedRaw) : DEFAULT_RUNTIME_SEED;
-  const seed = Number.isFinite(seedNum) ? (Math.trunc(seedNum) >>> 0) : DEFAULT_RUNTIME_SEED;
+  const seed = normalizeRuntimeSeed(seedNum);
 
   return {
     seed,

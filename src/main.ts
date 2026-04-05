@@ -73,7 +73,7 @@ async function main() {
   }
   ruleEval.setEnvEnergy(buffers.initialEnv);
   const stats = new StatsTracker();
-  const ui = createUI(canvas);
+  const ui = createUI(canvas, cfg.seed);
   const chartCanvas = document.getElementById('ecology-chart') as HTMLCanvasElement | null;
   const ecologyChart = chartCanvas ? new EcologyTrendChart(chartCanvas) : null;
 
