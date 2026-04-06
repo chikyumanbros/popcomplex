@@ -124,6 +124,25 @@ fn maskedEdge4(index: u32) -> bool {
   return (!isMasked(up) || !isMasked(dn) || !isMasked(lf) || !isMasked(rt));
 }
 
+fn maskedEdge8(index: u32) -> bool {
+  if (!isMasked(index)) { return false; }
+  let x = index % u.width;
+  let y = index / u.width;
+  if (x == 0u || x + 1u >= u.width || y == 0u || y + 1u >= u.height) {
+    return true;
+  }
+  let up = index - u.width;
+  let dn = index + u.width;
+  let lf = index - 1u;
+  let rt = index + 1u;
+  let ul = up - 1u;
+  let ur = up + 1u;
+  let dl = dn - 1u;
+  let dr = dn + 1u;
+  return (!isMasked(up) || !isMasked(dn) || !isMasked(lf) || !isMasked(rt) ||
+          !isMasked(ul) || !isMasked(ur) || !isMasked(dl) || !isMasked(dr));
+}
+
 @vertex
 fn vert(@builtin(vertex_index) vi: u32) -> VertexOutput {
   var positions = array<vec2f, 4>(
@@ -256,7 +275,8 @@ fn frag(@location(0) uv: vec2f) -> @location(0) vec4f {
   // Component highlight overlay (thin outline + soft fill).
   if (isMasked(index)) {
     let fill = vec3f(0.18, 0.40, 0.95);
-    let edgeBoost = select(0.0, 1.0, maskedEdge4(index));
+    // Use 8-neighbor edge so diagonal-only connectivity reads as a solid group.
+    let edgeBoost = select(0.0, 1.0, maskedEdge8(index));
     // Sub-cell edge emphasis: stronger near pixel edges.
     let sub = 1.0 - smoothstep(0.03, 0.14, edgeDist);
     let outline = edgeBoost * (0.55 + 0.45 * sub);

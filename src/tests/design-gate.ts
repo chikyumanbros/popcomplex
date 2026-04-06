@@ -146,12 +146,14 @@ function evaluateDesignGate(): GateResult[] {
 
   const parent = createProtoTape();
   const viableChildren: Uint8Array[] = [];
-  let aborted = 0;
+  let degradedBirth = 0;
   for (let i = 0; i < trials; i++) {
     const p = createProtoTape();
     const child = transcribeForReproduction(p);
     if (!child) {
-      aborted++;
+      // Back-compat API returns null on "degraded birth" outcomes.
+      // New reproduction path still spawns a weaker child instead of a hard stillbirth.
+      degradedBirth++;
       continue;
     }
     viableChildren.push(child.data);
@@ -198,7 +200,7 @@ function evaluateDesignGate(): GateResult[] {
       key: 'robustness',
       status: statusFrom(viableRate, 0.55, 0.35),
       value: viableRate.toFixed(3),
-      note: 'viable offspring rate (1 - stillbirth)',
+      note: 'viable reproduction-tape rate (1 - degradedBirth in reproduction probe)',
       blocking: true,
     },
     {
@@ -244,12 +246,12 @@ function evaluateDesignGate(): GateResult[] {
     },
   ];
 
-  const stillbirthRate = aborted / trials;
+  const stillbirthRate = degradedBirth / trials;
   results.push({
     key: 'stillbirth-rate',
     status: statusFromMax(stillbirthRate, 0.45, 0.70),
     value: stillbirthRate.toFixed(3),
-    note: 'observed stillbirth ratio during heredity probe',
+    note: 'observed degraded-birth ratio during heredity probe (legacy key name)',
     blocking: true,
   });
 

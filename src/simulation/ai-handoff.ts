@@ -24,6 +24,7 @@ import type { UIState } from '../ui/controls';
 import { measureEnergyBookkeeping, biomassReservoirTotal, type EnergyBookkeeping } from './energy-metrics';
 import { getRandomSeed } from './rng';
 import { countInvalidRuleOpcodes } from './tape-health';
+import type { TelemetrySnapshot } from './telemetry';
 
 function tapeHexDump(data: Uint8Array): string {
   const labels: Record<number, string> = {
@@ -90,7 +91,7 @@ interface OrgProfile {
   nnDominant: MoodIdx;
 }
 
-function summarizeOrganism(world: World, org: Organism): OrgProfile {
+function summarizeOrganism(world: World, org: Organism, neighborMode: 'four' | 'eight'): OrgProfile {
   let energy = 0;
   let stomach = 0;
   let morphA = 0;
@@ -128,10 +129,28 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
     markerSignal += mkSignal;
     markerMove += mkMove;
 
-    if (x === 0 || !own.has(idx - 1)) boundaryFaces++;
-    if (x === GRID_WIDTH - 1 || !own.has(idx + 1)) boundaryFaces++;
-    if (y === 0 || !own.has(idx - GRID_WIDTH)) boundaryFaces++;
-    if (y === GRID_HEIGHT - 1 || !own.has(idx + GRID_WIDTH)) boundaryFaces++;
+    if (neighborMode === 'four') {
+      if (x === 0 || !own.has(idx - 1)) boundaryFaces++;
+      if (x === GRID_WIDTH - 1 || !own.has(idx + 1)) boundaryFaces++;
+      if (y === 0 || !own.has(idx - GRID_WIDTH)) boundaryFaces++;
+      if (y === GRID_HEIGHT - 1 || !own.has(idx + GRID_WIDTH)) boundaryFaces++;
+    } else {
+      // 8-neighbor boundary: count missing neighbors among the Moore neighborhood.
+      // This makes the boundary metric comparable across neighbor modes (normalized by 8*n below).
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) {
+            boundaryFaces++;
+            continue;
+          }
+          const nIdx = ny * GRID_WIDTH + nx;
+          if (!own.has(nIdx)) boundaryFaces++;
+        }
+      }
+    }
   }
 
   const n = Math.max(1, own.size);
@@ -154,7 +173,7 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
     morphA,
     morphB,
     meanMarkers: [markerEat / n, markerDigest / n, markerSignal / n, markerMove / n],
-    boundaryRatio: boundaryFaces / (4 * n),
+    boundaryRatio: boundaryFaces / ((neighborMode === 'four' ? 4 : 8) * n),
     compactness: own.size / (bboxW * bboxH),
     centerX: cx / n,
     centerY: cy / n,
@@ -171,6 +190,8 @@ export interface AIHandoffInput {
   ui?: UIState;
   /** If omitted, computed via full grid scan. */
   bookkeepingSnapshot?: EnergyBookkeeping;
+  /** Optional: additional counters since last telemetry reset. */
+  telemetrySnapshot?: TelemetrySnapshot;
 }
 
 export type AIHandoffPromptPreset = 'review' | 'ecology' | 'tape';
@@ -198,8 +219,9 @@ export function buildAIHandoffPrompt(preset: AIHandoffPromptPreset): string {
 }
 
 export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
-  const { tick, world, organisms, ruleEval, ui, bookkeepingSnapshot } = input;
+  const { tick, world, organisms, ruleEval, ui, bookkeepingSnapshot, telemetrySnapshot } = input;
   const orgList = [...organisms.organisms.values()].sort((a, b) => b.cells.size - a.cells.size);
+  const neighborMode = ruleEval.getNeighborMode();
 
   let orgRegistryCells = 0;
   for (const org of orgList) orgRegistryCells += org.cells.size;
@@ -250,6 +272,14 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     `- **drift (measured − budget)**: ${(systemE - ruleEval.ecosystemEnergyBudget).toFixed(4)}`,
   );
   lines.push(`- **sum(morphA) / morphB** (not in closed budget): ${bk.morphA.toFixed(1)} / ${bk.morphB.toFixed(1)}`);
+  if (telemetrySnapshot) {
+    const t = telemetrySnapshot;
+    lines.push(
+      `- **telemetry (since last reset)**: emitA=${t.morphAEmitted.toFixed(2)} emitB=${t.morphBEmitted.toFixed(2)} ` +
+        `decayA=${t.morphADecayed.toFixed(2)} decayB=${t.morphBDecayed.toFixed(2)} ` +
+        `gutLeak=${t.gutLeakTotal.toFixed(2)} recovered=${t.gutLeakRecovered.toFixed(2)} toEnv=${t.gutLeakToEnv.toFixed(2)}`,
+    );
+  }
   if (ui) {
     lines.push(`- **UI**: paused=${ui.paused} speed=${ui.speed}`);
   }
@@ -260,7 +290,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   lines.push(`- **proto NN seed (fixed starter)**: 0x${PROTO_TAPE_NN_SEED.toString(16)}`);
   lines.push('');
 
-  const profiles = orgList.map((org) => summarizeOrganism(world, org));
+  const profiles = orgList.map((org) => summarizeOrganism(world, org, neighborMode));
   const moodOrgCounts = [0, 0, 0, 0];
   const moodCellCounts = [0, 0, 0, 0];
   for (const p of profiles) {
@@ -335,16 +365,18 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     `- **Degradation**: XOR one bit per hit; probability × \`tapeByteDegradationSensitivity(i)\` (\`TAPE_DEGRAD_SENS_*\`) — replication key, rule opcodes, maxCells, refractory, NN band are tuned sturdier than average literals.`,
   );
   lines.push(
-    `- **Child degradation**: always **zeros** on \`new Tape(data)\` after transcribe — parent wear biases copy noise / stillbirth only, not inherited wear bits.`,
+    `- **Child degradation**: base child tape starts with **zero wear bits** on construction, but reproduction can intentionally add initial wear / NOPs in “degraded birth” outcomes (see \`rule-evaluator.ts\`).`,
   );
   lines.push(
-    `- Reproduction **\`transcribeForReproduction()\`** (**\`transcription.ts\`**): same **length-preserving** channel as \`transcribe()\` (bit-flip + rare swap + mis-fetch). **Channel swap**: base prob \`${CHANNEL_SWAP_BASE_PROB}\`, then acceptance × coarse **cross-region** \`${CHANNEL_SWAP_ACCEPT_CROSS_REGION_MULT}\` if endpoints differ in {data,CA,rules,NN}; × \`${CHANNEL_SWAP_ACCEPT_REPL_KEY_MULT}\` if either byte is replication key **60–63**; × \`${CHANNEL_SWAP_ACCEPT_RULE_TABLE_MULT}\` if either is rule table **64–127** (tunable exports). **Replication key**: parent **degradation** on those bytes **amplifies** copy noise there; after copy, a **viability roll** can **abort** offspring (stillbirth) — cost is reproduce heat only, **no** child, cooldown applies, action returns failure (no reproduce feedback).`,
+    `- Reproduction **\`transcribeForReproductionOutcome()\`** (**\`transcription.ts\`**): same **length-preserving** channel as \`transcribe()\` (bit-flip + rare swap + mis-fetch). **Channel swap**: base prob \`${CHANNEL_SWAP_BASE_PROB}\`, then acceptance × coarse **cross-region** \`${CHANNEL_SWAP_ACCEPT_CROSS_REGION_MULT}\` if endpoints differ in {data,CA,rules,NN}; × \`${CHANNEL_SWAP_ACCEPT_REPL_KEY_MULT}\` if either byte is replication key **60–63**; × \`${CHANNEL_SWAP_ACCEPT_RULE_TABLE_MULT}\` if either is rule table **64–127** (tunable exports). **Replication key**: parent **degradation** on those bytes **amplifies** copy noise there. Instead of hard stillbirth, a **degraded birth** outcome can spawn a weaker child (reduced initial energy + extra initial wear / NOPs).`,
   );
   lines.push('- **REPAIR (0x0C)**: immune action — weighted mend of `degradation` + clamp invalid rule opcodes to NOP; success rate × `(1 + k × quorum)` where quorum = same-org neighbors (full) + foreign neighbors weighted by multi-factor kin trust (**public** kin tag + signal marker + morph A — face-only mimicry stays weak; private genetic tag is not used).');
   lines.push('- **ABSORB (0x07)**: heterospecific contact is a **single continuous interaction**: morph affinity continuously shifts between (A) symmetric relax (cell↔cell equalization) and (B) stomach inflow (neighbor cell energy → actor stomach). JAM acts like **immunity** that dampens both good+bad coupling; large connected groups amplify both immunity and breaking. Low-rate horizontal rule-opcode transfer can occur at the interface (`donor -> host`); fixation is a deterministic contest of contact-drive (foreign-contact pressure + stomach load + interface flux + kin trust) vs local REPAIR quorum defense, with a small heat fee on successful integration.');
   lines.push('- **Social consensus (signal gossip)**: each tick, same-org orthogonal neighbors softly pull a cell’s signal marker toward local mean (local averaging), producing agreement/dissent dynamics from topology without explicit role flags.');
   lines.push('- **Consensus-coupled maintenance**: higher local signal cohesion slightly boosts REPAIR success, linking social agreement to collective maintenance outcomes.');
   lines.push('- **GIVE (0x04)**: same-org redistribution unchanged; may also push energy to **foreign** cells when kin trust is high enough, with extra heat loss scaling with imperfect trust (parasitic “fake kin” if **public** face + signal + morph align; private genetic tag not used).');
+  lines.push('- **Deterministic decay (rot)**: cells with `energy <= 0` accumulate a deterministic `rot` gauge; large connected components slow rot, harsher metabolism speeds it. Cells dissolve when `rot >= 1` (see `cleanup-phase.ts`).');
+  lines.push('- **Dead tissue gut leak + recovery**: dead cells leak a fraction of stomach each tick; same-org living neighbors preferentially recover it into stomach inflow, remainder becomes local env energy (see `rule-evaluator.ts`).');
   lines.push('');
 
   lines.push('### Per-organism (up to 8, largest first)');

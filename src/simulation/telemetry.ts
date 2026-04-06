@@ -25,6 +25,13 @@ export interface TelemetrySnapshot {
   xenoTransferDriveSum: number;
   socialCohesionSamples: number;
   socialCohesionSum: number;
+  morphAEmitted: number;
+  morphBEmitted: number;
+  morphADecayed: number;
+  morphBDecayed: number;
+  gutLeakTotal: number;
+  gutLeakRecovered: number;
+  gutLeakToEnv: number;
   actionExec: number[];
 }
 
@@ -57,6 +64,13 @@ const counters: TelemetrySnapshot = {
   xenoTransferDriveSum: 0,
   socialCohesionSamples: 0,
   socialCohesionSum: 0,
+  morphAEmitted: 0,
+  morphBEmitted: 0,
+  morphADecayed: 0,
+  morphBDecayed: 0,
+  gutLeakTotal: 0,
+  gutLeakRecovered: 0,
+  gutLeakToEnv: 0,
   actionExec: new Array(ACTION_SLOTS).fill(0),
 };
 
@@ -126,6 +140,19 @@ export function recordSocialCohesion(cohesion01: number) {
   bump('socialCohesionSamples');
   bump('socialCohesionSum', Math.max(0, Math.min(1, cohesion01)));
 }
+export function recordMorphEmitted(channel: 0 | 1, amount: number) {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  bump(channel === 0 ? 'morphAEmitted' : 'morphBEmitted', amount);
+}
+export function recordMorphDecayed(channel: 0 | 1, amount: number) {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  bump(channel === 0 ? 'morphADecayed' : 'morphBDecayed', amount);
+}
+export function recordGutLeak(total: number, recovered: number, toEnv: number) {
+  if (Number.isFinite(total) && total > 0) bump('gutLeakTotal', total);
+  if (Number.isFinite(recovered) && recovered > 0) bump('gutLeakRecovered', recovered);
+  if (Number.isFinite(toEnv) && toEnv > 0) bump('gutLeakToEnv', toEnv);
+}
 export function recordActionExecution(op: number) {
   if (op < 0 || op >= counters.actionExec.length) return;
   counters.actionExec[op]++;
@@ -159,6 +186,13 @@ export function snapshotAndResetTelemetry(): TelemetrySnapshot {
     xenoTransferDriveSum: counters.xenoTransferDriveSum,
     socialCohesionSamples: counters.socialCohesionSamples,
     socialCohesionSum: counters.socialCohesionSum,
+    morphAEmitted: counters.morphAEmitted,
+    morphBEmitted: counters.morphBEmitted,
+    morphADecayed: counters.morphADecayed,
+    morphBDecayed: counters.morphBDecayed,
+    gutLeakTotal: counters.gutLeakTotal,
+    gutLeakRecovered: counters.gutLeakRecovered,
+    gutLeakToEnv: counters.gutLeakToEnv,
     actionExec: [...counters.actionExec],
   };
 
@@ -188,6 +222,52 @@ export function snapshotAndResetTelemetry(): TelemetrySnapshot {
   counters.xenoTransferDriveSum = 0;
   counters.socialCohesionSamples = 0;
   counters.socialCohesionSum = 0;
+  counters.morphAEmitted = 0;
+  counters.morphBEmitted = 0;
+  counters.morphADecayed = 0;
+  counters.morphBDecayed = 0;
+  counters.gutLeakTotal = 0;
+  counters.gutLeakRecovered = 0;
+  counters.gutLeakToEnv = 0;
   counters.actionExec.fill(0);
   return snap;
+}
+
+export function snapshotTelemetry(): TelemetrySnapshot {
+  return {
+    tapeCorruptions: counters.tapeCorruptions,
+    writeRandomizations: counters.writeRandomizations,
+    channelBitflips: counters.channelBitflips,
+    channelSwapsAccepted: counters.channelSwapsAccepted,
+    channelSwapsRejected: counters.channelSwapsRejected,
+    readMisfetches: counters.readMisfetches,
+    ruleDuplications: counters.ruleDuplications,
+    ruleSwaps: counters.ruleSwaps,
+    dataDuplications: counters.dataDuplications,
+    reproductionAttempts: counters.reproductionAttempts,
+    reproductionSuccess: counters.reproductionSuccess,
+    birthsFromReproduce: counters.birthsFromReproduce,
+    birthsFromSplit: counters.birthsFromSplit,
+    stillbirths: counters.stillbirths,
+    reproduceFailDominance: counters.reproduceFailDominance,
+    reproduceFailCrowding: counters.reproduceFailCrowding,
+    splitEvents: counters.splitEvents,
+    splitFragments: counters.splitFragments,
+    splitFragmentCells: counters.splitFragmentCells,
+    splitFragmentSingletons: counters.splitFragmentSingletons,
+    splitLargestKeptCells: counters.splitLargestKeptCells,
+    xenoTransferAttempts: counters.xenoTransferAttempts,
+    xenoTransferSuccess: counters.xenoTransferSuccess,
+    xenoTransferDriveSum: counters.xenoTransferDriveSum,
+    socialCohesionSamples: counters.socialCohesionSamples,
+    socialCohesionSum: counters.socialCohesionSum,
+    morphAEmitted: counters.morphAEmitted,
+    morphBEmitted: counters.morphBEmitted,
+    morphADecayed: counters.morphADecayed,
+    morphBDecayed: counters.morphBDecayed,
+    gutLeakTotal: counters.gutLeakTotal,
+    gutLeakRecovered: counters.gutLeakRecovered,
+    gutLeakToEnv: counters.gutLeakToEnv,
+    actionExec: [...counters.actionExec],
+  };
 }

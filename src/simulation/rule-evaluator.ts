@@ -23,6 +23,9 @@ import {
   recordActionExecution,
   recordBirthFromReproduce,
   recordBirthFromSplit,
+  recordGutLeak,
+  recordMorphDecayed,
+  recordMorphEmitted,
   recordReproductionAttempt,
   recordReproductionSuccess,
   recordReproduceFailCrowding,
@@ -262,6 +265,10 @@ export class RuleEvaluator {
     this.metabolicScale = opts.metabolicScale ?? 1;
     this.distressFireChanceScale = opts.distressFireChanceScale ?? 1;
     this.jamTicks = new Uint8Array(TOTAL_CELLS);
+  }
+
+  getNeighborMode(): NeighborMode {
+    return this.neighborMode;
   }
 
   private neighborDirs(): [number, number][] {
@@ -913,15 +920,20 @@ export class RuleEvaluator {
       return;
     }
 
+    let recovered = 0;
+    let toEnv = 0;
     for (const s of sinks) {
       const amt = leak * (s.w / wSum);
       if (amt <= 1e-9) continue;
       if (s.idx === cell.idx) {
         this.envEnergy[cell.idx] += amt;
+        toEnv += amt;
       } else {
         this.stomachInflow(s.idx, amt);
+        recovered += amt;
       }
     }
+    recordGutLeak(leak, recovered, toEnv);
   }
 
   private actionEat(cell: CellCtx, maxGather: number, orgSize = 1): boolean {
@@ -1224,9 +1236,11 @@ export class RuleEvaluator {
     if (channel === 0) {
       const cur = this.world.getMorphogenA(cell.idx);
       this.world.setMorphogenA(cell.idx, cur + amount);
+      recordMorphEmitted(0, amount);
     } else {
       const cur = this.world.getMorphogenB(cell.idx);
       this.world.setMorphogenB(cell.idx, cur + amount);
+      recordMorphEmitted(1, amount);
     }
   }
 
@@ -1661,10 +1675,14 @@ export class RuleEvaluator {
     for (const idx of org.cells) {
       let a = this.world.getMorphogenA(idx) + (deltaA.get(idx) ?? 0);
       let b = this.world.getMorphogenB(idx) + (deltaB.get(idx) ?? 0);
-      a *= (1 - MORPHOGEN_DECAY);
-      b *= (1 - MORPHOGEN_DECAY);
+      const decayA = a * MORPHOGEN_DECAY;
+      const decayB = b * MORPHOGEN_DECAY;
+      a -= decayA;
+      b -= decayB;
       this.world.setMorphogenA(idx, a);
       this.world.setMorphogenB(idx, b);
+      recordMorphDecayed(0, decayA);
+      recordMorphDecayed(1, decayB);
     }
   }
 

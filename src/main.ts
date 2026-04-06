@@ -21,7 +21,7 @@ import {
 } from './simulation/energy-metrics';
 import { setRandomSeed, getRandomSeed } from './simulation/rng';
 import { readRuntimeConfigFromUrl } from './simulation/runtime-config';
-import { snapshotAndResetTelemetry } from './simulation/telemetry';
+import { snapshotAndResetTelemetry, snapshotTelemetry } from './simulation/telemetry';
 import {
   addRegionalEnvBumps,
   addRegionalEnvBumpsConservative,
@@ -275,6 +275,7 @@ async function main() {
       ruleEval,
       ui,
       bookkeepingSnapshot: bk,
+      telemetrySnapshot: snapshotTelemetry(),
     });
   }
 
