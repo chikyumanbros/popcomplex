@@ -9,7 +9,8 @@ export const TAPE_SNAPSHOT_BYTES = TAPE_SIZE * 2;
 /**
  * Tape layout (`data` is 256 bytes; `degradation` mirrors each index):
  * - **0–31** — Data region: operation nodes 0–15, literal pool 16–31; **byte 4** = maxCells (structural).
- * - **28–30** — Lineage pigment (evolvable); **31** = lineage aux (mixed into `getLineagePacked` 24-bit tag).
+ * - **28–31** — **Public kin tag (“face”)**: evolvable; used for render tint, `kinTrustForeign` lineageSim, and synced to `World.cellData[..+7]`. Same XOR pack as before (`getPublicKinTagPacked`).
+ * - **33–36** — **Private genetic kin tag** (CA padding): true clade signal; **not** used in trust. If still proto padding (`0x80`×4), `getGeneticKinTagPacked()` falls back to public (old snapshots).
  * - **32–63** — CA band: refractory = low nibble of 32; **48–59** = module bank: **all 12** slots count toward **cell energy cap**; **DIGEST/EAT/ABSORB/TAKE** slots (see `STOMACH_CAPACITY_BANK_SLOT_INDICES`) count toward **stomach cap** only; slot **49** = DIGEST — must match code for stomach→energy digestion; **60–63** replication key.
  * - **64–127** — Condition→action rules: 16 slots × 4 bytes (flags, threshold, opcode, actionParam node index).
  * - **128–255** — NN parameters (pairs of bytes → float; see `getNNWeights`).
@@ -38,12 +39,55 @@ export const PROTO_TAPE_NN_SEED = 0x50fc0d65;
 export const RULE_SIZE = 4;
 export const MAX_RULES = CONDITIONS_SIZE / RULE_SIZE;
 
-/** 3 bytes in data region (literal pool) — evolvable “pigment / kinship” for rendering; near relatives share similar values. */
+/** Public “face” kin bytes (data region): others infer trust from the packed 24-bit tag (+ signal + morph). */
 export const LINEAGE_BYTE_0 = 28;
 export const LINEAGE_BYTE_1 = 29;
 export const LINEAGE_BYTE_2 = 30;
-/** Fourth lineage byte: XOR-mixed into the 24-bit packed lineage hue (byte 31 in data region). */
+/** XOR-mixed into the 24-bit public kin tag (same as legacy “lineage aux”). */
 export const LINEAGE_BYTE_AUX = 31;
+
+/** Private genetic kin tag (CA band, unused padding in proto); not read for `kinTrustForeign`. */
+export const GENETIC_KIN_BYTE_0 = 33;
+export const GENETIC_KIN_BYTE_1 = 34;
+export const GENETIC_KIN_BYTE_2 = 35;
+export const GENETIC_KIN_BYTE_AUX = 36;
+
+/** Proto / legacy snapshots leave genetic bytes as `0x80`; then genetic packed equals public. */
+export const GENETIC_KIN_UNSET_BYTE = 0x80;
+
+/** 24-bit kin tag pack (public and genetic use the same mix). */
+export function packKinTag24(
+  data: Uint8Array,
+  i0: number,
+  i1: number,
+  i2: number,
+  iAux: number,
+): number {
+  const a = data[i0]! & 0xff;
+  const b = data[i1]! & 0xff;
+  const c = data[i2]! & 0xff;
+  const aux = data[iAux]! & 0xff;
+  let base = ((a << 16) | (b << 8) | c) >>> 0;
+  base ^= Math.imul(aux, 0x9e3779b9) >>> 0;
+  return base & 0xffffff;
+}
+
+export function isGeneticKinTagUnset(data: Uint8Array): boolean {
+  return (
+    (data[GENETIC_KIN_BYTE_0]! & 0xff) === GENETIC_KIN_UNSET_BYTE &&
+    (data[GENETIC_KIN_BYTE_1]! & 0xff) === GENETIC_KIN_UNSET_BYTE &&
+    (data[GENETIC_KIN_BYTE_2]! & 0xff) === GENETIC_KIN_UNSET_BYTE &&
+    (data[GENETIC_KIN_BYTE_AUX]! & 0xff) === GENETIC_KIN_UNSET_BYTE
+  );
+}
+
+/** Copy bytes 28–31 → 33–36 so offspring start with face === genome until mutation splits them. */
+export function syncGeneticKinFromPublic(data: Uint8Array): void {
+  data[GENETIC_KIN_BYTE_0] = data[LINEAGE_BYTE_0]!;
+  data[GENETIC_KIN_BYTE_1] = data[LINEAGE_BYTE_1]!;
+  data[GENETIC_KIN_BYTE_2] = data[LINEAGE_BYTE_2]!;
+  data[GENETIC_KIN_BYTE_AUX] = data[LINEAGE_BYTE_AUX]!;
+}
 
 /**
  * Replication “key” in the CA padding band (byte 32 low nibble is refractory; 48–59 is energy-cap bank).
@@ -147,10 +191,18 @@ export const TAPE_DEGRAD_SENS_RULE_OPCODE = 0.4;
 export const TAPE_DEGRAD_SENS_REFRACTORY = 0.52;
 export const TAPE_DEGRAD_SENS_NN = 0.82;
 export const TAPE_DEGRAD_SENS_DEFAULT = 1.0;
+/** Public + private kin tags: sturdier than generic literals (mimicry / clade identity). */
+export const TAPE_DEGRAD_SENS_KIN_TAG = 0.34;
 
 export function tapeByteDegradationSensitivity(index: number): number {
   const i = index | 0;
   if (i === 4) return TAPE_DEGRAD_SENS_MAXCELLS;
+  if (
+    (i >= LINEAGE_BYTE_0 && i <= LINEAGE_BYTE_AUX) ||
+    (i >= GENETIC_KIN_BYTE_0 && i <= GENETIC_KIN_BYTE_AUX)
+  ) {
+    return TAPE_DEGRAD_SENS_KIN_TAG;
+  }
   if (i >= ENERGY_CAP_BANK_OFFSET && i < ENERGY_CAP_BANK_OFFSET + ENERGY_CAP_BANK_LEN) {
     return TAPE_DEGRAD_SENS_ENERGY_CAP_BANK;
   }
@@ -297,15 +349,29 @@ export class Tape {
     return mask >>> 0;
   }
 
-  /** 24-bit kinship tag from bytes 28–31 (aux byte 31 XOR-mixed); transcribe + drift → similar hue for clades. */
+  /** Public “face” 24-bit tag: render + `kinTrustForeign` lineageSim (bytes 28–31). */
+  getPublicKinTagPacked(): number {
+    return packKinTag24(this.data, LINEAGE_BYTE_0, LINEAGE_BYTE_1, LINEAGE_BYTE_2, LINEAGE_BYTE_AUX);
+  }
+
+  /**
+   * Private genetic 24-bit tag (bytes 33–36). Not used in foreign kin trust.
+   * Unset tape (`0x80`×4 in 33–36) → same value as public (backward compatible).
+   */
+  getGeneticKinTagPacked(): number {
+    if (isGeneticKinTagUnset(this.data)) return this.getPublicKinTagPacked();
+    return packKinTag24(
+      this.data,
+      GENETIC_KIN_BYTE_0,
+      GENETIC_KIN_BYTE_1,
+      GENETIC_KIN_BYTE_2,
+      GENETIC_KIN_BYTE_AUX,
+    );
+  }
+
+  /** @deprecated Use `getPublicKinTagPacked()`; kept for call-site compatibility. */
   getLineagePacked(): number {
-    const a = this.data[LINEAGE_BYTE_0] & 0xff;
-    const b = this.data[LINEAGE_BYTE_1] & 0xff;
-    const c = this.data[LINEAGE_BYTE_2] & 0xff;
-    const aux = this.data[LINEAGE_BYTE_AUX] & 0xff;
-    let base = ((a << 16) | (b << 8) | c) >>> 0;
-    base ^= Math.imul(aux, 0x9e3779b9) >>> 0;
-    return base & 0xffffff;
+    return this.getPublicKinTagPacked();
   }
 
   getRule(index: number): ConditionRule {
@@ -556,6 +622,7 @@ export function createProtoTape(): Tape {
   // === CA region (bytes 32-63) ===
   d[CA_RULES_OFFSET] = 0x03; // refractoryPeriod = 3
   for (let i = 1; i < CA_RULES_SIZE; i++) d[CA_RULES_OFFSET + i] = 128;
+  syncGeneticKinFromPublic(d);
   // Energy storage capability subsystem in CA free band:
   // 11 active modules => cap = 8 + 11*8 = 96 (recommended default).
   encodeEnergyCapBank(d, 11);

@@ -1,3 +1,7 @@
+/**
+ * Rule-table opcode → side effects (markers, feedback, delegated actions).
+ * Signal / morph / FIRE nuances (including distress FIRE vs table FIRE): `docs/signal-morph-actions.md`.
+ */
 import { type Organism } from '../organism';
 import { ActionOpcode, type ConditionRule, type ReadCtx, type Tape } from '../tape';
 

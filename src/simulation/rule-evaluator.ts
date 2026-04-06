@@ -89,13 +89,15 @@ const REPAIR_NEIGHBOR_COEFF = 0.16; // success mult += coeff * sameOrthogonalNei
 const REPAIR_BASE_P         = 0.36; // base success before bias × intensity
 const REPAIR_DEG_HEAL       = 36;   // degradation subtracted on success
 
-// Cross-org “kin” trust: pigment (cell lineage field) + signal marker + morph A — all must roughly match (pigment-only mimicry stays weak).
+// Cross-org “kin” trust: public kin tag on cell (tape bytes 28–31, “face”) + signal marker + morph A — all must roughly match (face-only mimicry stays weak; private genetic bytes 33–36 are not used here).
 const KIN_TRUST_CAP_FOREIGN      = 0.52;
 const KIN_TRUST_FOREIGN_SCALE    = 1.12;
 const KIN_GIVE_MIN_TRUST         = 0.36;
 const KIN_GIVE_RATE_CAP          = 0.24;   // vs same-org GIVE strength
 const KIN_GIVE_EXTRA_HEAT        = 0.2;    // mis-altruism waste scales with imperfect trust
 const REPAIR_FOREIGN_KIN_WEIGHT  = 0.4;    // foreign neighbor adds trust*this to repair quorum (capped trust above)
+/** Same-org GIVE/TAKE: extra heat when local signal marker + morph A disagree with neighbor (no new state). */
+const SAME_ORG_TRANSFER_MISMATCH_EXTRA = 0.14; // added to base 0.1 fractional loss at worst alignment (after floor)
 
 // Structural constants (NOT evolvable — facts of physics)
 const ISOLATION_METABOLIC_PENALTY = 0.12; // isolated cell pays up to +12% metabolic vs well-connected tissue
@@ -744,7 +746,10 @@ export class RuleEvaluator {
     return getActionCostForOpcode(opcode);
   }
 
-  /** Add non-negative stomach inflow; overflow spills to this cell’s env (preserves closed energy budget). */
+  /**
+   * Add non-negative stomach inflow; overflow spills to this cell’s env (preserves closed energy budget).
+   * Call-site map (env / prey → stomach): see [`behaviors/stomach-env-lane.ts`](behaviors/stomach-env-lane.ts).
+   */
   private stomachInflow(idx: number, amount: number) {
     if (amount < 1e-8) return;
     const orgId = this.world.getOrganismIdByIdx(idx);
@@ -841,6 +846,22 @@ export class RuleEvaluator {
     return Math.min(KIN_TRUST_CAP_FOREIGN, Math.cbrt(g) * KIN_TRUST_FOREIGN_SCALE);
   }
 
+  /**
+   * 0..1 tissue alignment for same-org direct transfers: signal marker + morph A (same cues as foreign kin, minus lineage byte).
+   * Floored so transfers never become pathological; mismatch mostly wastes heat to the environment.
+   */
+  private sameOrgTissueCoupling(aIdx: number, bIdx: number): number {
+    const sigS = this.world.getMarkerByIdx(aIdx, MARKER_SIGNAL);
+    const sigN = this.world.getMarkerByIdx(bIdx, MARKER_SIGNAL);
+    const signalSim = 1 - Math.min(1, Math.abs(sigS - sigN) / 96);
+    const mS = this.world.getMorphogenA(aIdx);
+    const mN = this.world.getMorphogenA(bIdx);
+    const morphSim = 1 - Math.min(1, Math.abs(mS - mN) / 7);
+    const g = Math.max(0, signalSim) * Math.max(0, morphSim);
+    const c = Math.sqrt(g);
+    return Math.min(1, Math.max(0.3, c));
+  }
+
   /** Repair quorum: 1 per same-org neighbor + weighted foreign “kin” matches (deceptive pigment helps only if chemistry aligns). */
   private repairQuorumKin(cell: CellCtx): number {
     const dirs = this.neighborDirs();
@@ -920,7 +941,9 @@ export class RuleEvaluator {
       if (nOrg === cell.orgId) {
         if (basePush < 0.2) continue;
         if (ne < cell.energy - basePush) {
-          const loss = basePush * 0.1;
+          const c = this.sameOrgTissueCoupling(cell.idx, nIdx);
+          const lossFrac = 0.1 + SAME_ORG_TRANSFER_MISMATCH_EXTRA * (1 - c);
+          const loss = basePush * lossFrac;
           this.setCellEnergyCapped(nx, ny, ne + basePush - loss, nOrg);
           given += basePush;
           heat += loss;
@@ -958,7 +981,10 @@ export class RuleEvaluator {
       if (ne > cell.energy) {
         const pull = Math.min(ne * 0.15, maxPull);
         if (pull < 0.1) continue;
-        const loss = pull * 0.1;
+        const nIdx = ny * GRID_WIDTH + nx;
+        const c = this.sameOrgTissueCoupling(cell.idx, nIdx);
+        const lossFrac = 0.1 + SAME_ORG_TRANSFER_MISMATCH_EXTRA * (1 - c);
+        const loss = pull * lossFrac;
         this.setCellEnergyCapped(nx, ny, ne - pull, cell.orgId);
         taken += pull - loss;
         heat += loss;
@@ -1011,7 +1037,7 @@ export class RuleEvaluator {
       cell.orgId,
       childType,
       childStored,
-      tape.getLineagePacked(),
+      tape.getPublicKinTagPacked(),
     );
     org.cells.add(bestDir[1] * GRID_WIDTH + bestDir[0]);
     cell.energy -= divCost;
@@ -1128,7 +1154,7 @@ export class RuleEvaluator {
       const childCap = this.safeCellEnergyCapForOrg(childId);
       const childStored = Math.min(childE, childCap);
       const childOverflow = Math.max(0, childE - childStored);
-      this.world.setCell(nx, ny, childId, CellType.Stem, childStored, childTape.getLineagePacked());
+      this.world.setCell(nx, ny, childId, CellType.Stem, childStored, childTape.getPublicKinTagPacked());
       cell.energy -= childE + REPRODUCE_ACTION_COST;
       cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
       this.envEnergy[cell.idx] += REPRODUCE_ACTION_COST + childOverflow;

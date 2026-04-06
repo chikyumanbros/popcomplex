@@ -84,7 +84,10 @@ const MOOD_NAMES: Record<MoodIdx, string> = {
 
 interface OrgProfile {
   id: number;
+  /** Public kin tag (“face”): render + foreign kin trust; may diverge from `geneticKinTag` (mimicry). */
   lineage: number;
+  /** Private genetic kin tag from tape bytes 33–36; not used in `kinTrustForeign`. */
+  geneticKinTag: number;
   parentId: number | null;
   cells: number;
   age: number;
@@ -155,7 +158,8 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
 
   return {
     id: org.id,
-    lineage: org.tape.getLineagePacked() & 0xffffff,
+    lineage: org.tape.getPublicKinTagPacked() & 0xffffff,
+    geneticKinTag: org.tape.getGeneticKinTagPacked() & 0xffffff,
     parentId: org.parentId,
     cells: own.size,
     age: org.age,
@@ -298,6 +302,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     else macro += 1;
   }
 
+  /** Counts **public** kin tags on cells (apparent lineages; mimics merge here). */
   const lineageCounts = new Map<number, number>();
   for (let i = 0; i < TOTAL_CELLS; i++) {
     if (world.getOrganismIdByIdx(i) === 0) continue;
@@ -314,7 +319,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   lines.push(`- **size classes (org count)**: micro(1)=${micro}, small(2-4)=${small}, medium(5-15)=${medium}, macro(16+)=${macro}`);
   if (topLineages.length > 0) {
     lines.push(
-      `- **top lineages by occupied cells**: ${topLineages.map(([lin, c]) => `0x${lin.toString(16).padStart(6, '0')}:${c} (${((c / Math.max(1, occupied)) * 100).toFixed(1)}%)`).join(' | ')}`,
+      `- **top lineages by occupied cells** (public kin “face” only): ${topLineages.map(([lin, c]) => `0x${lin.toString(16).padStart(6, '0')}:${c} (${((c / Math.max(1, occupied)) * 100).toFixed(1)}%)`).join(' | ')}`,
     );
   } else {
     lines.push('- **top lineages by occupied cells**: _(none)_');
@@ -352,11 +357,11 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   lines.push(
     `- Reproduction **\`transcribeForReproduction()\`** (**\`transcription.ts\`**): same **length-preserving** channel as \`transcribe()\` (bit-flip + rare swap + mis-fetch). **Channel swap**: base prob \`${CHANNEL_SWAP_BASE_PROB}\`, then acceptance × coarse **cross-region** \`${CHANNEL_SWAP_ACCEPT_CROSS_REGION_MULT}\` if endpoints differ in {data,CA,rules,NN}; × \`${CHANNEL_SWAP_ACCEPT_REPL_KEY_MULT}\` if either byte is replication key **60–63**; × \`${CHANNEL_SWAP_ACCEPT_RULE_TABLE_MULT}\` if either is rule table **64–127** (tunable exports). **Replication key**: parent **degradation** on those bytes **amplifies** copy noise there; after copy, a **viability roll** can **abort** offspring (stillbirth) — cost is reproduce heat only, **no** child, cooldown applies, action returns failure (no reproduce feedback).`,
   );
-  lines.push('- **REPAIR (0x0C)**: immune action — weighted mend of `degradation` + clamp invalid rule opcodes to NOP; success rate × `(1 + k × quorum)` where quorum = same-org neighbors (full) + foreign neighbors weighted by multi-factor kin trust (lineage field + signal marker + morph A, geometric mean — pigment-only mimicry stays weak).');
+  lines.push('- **REPAIR (0x0C)**: immune action — weighted mend of `degradation` + clamp invalid rule opcodes to NOP; success rate × `(1 + k × quorum)` where quorum = same-org neighbors (full) + foreign neighbors weighted by multi-factor kin trust (**public** kin tag + signal marker + morph A — face-only mimicry stays weak; private genetic tag is not used).');
   lines.push('- **ABSORB (0x07)**: at heterospecific contact interfaces (predatory steal and compatible relax-contact), low-rate horizontal rule-opcode transfer can occur (`donor -> host`); fixation is a deterministic contest of contact-drive (foreign-contact pressure + stomach load + flux + kin trust) vs local REPAIR quorum defense, with a small heat fee on successful integration.');
   lines.push('- **Social consensus (signal gossip)**: each tick, same-org orthogonal neighbors softly pull a cell’s signal marker toward local mean (local averaging), producing agreement/dissent dynamics from topology without explicit role flags.');
   lines.push('- **Consensus-coupled maintenance**: higher local signal cohesion slightly boosts REPAIR success, linking social agreement to collective maintenance outcomes.');
-  lines.push('- **GIVE (0x04)**: same-org redistribution unchanged; may also push energy to **foreign** cells when kin trust is high enough, with extra heat loss scaling with imperfect trust (parasitic “fake kin” possible if chemistry aligns).');
+  lines.push('- **GIVE (0x04)**: same-org redistribution unchanged; may also push energy to **foreign** cells when kin trust is high enough, with extra heat loss scaling with imperfect trust (parasitic “fake kin” if **public** face + signal + morph align; private genetic tag not used).');
   lines.push('');
 
   lines.push('### Per-organism (up to 8, largest first)');
@@ -414,7 +419,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
       const p = item.profile;
       const degSum = organisms.get(p.id)?.tape.degradation.reduce((a, b) => a + b, 0) ?? 0;
       lines.push(
-        `- **${item.title} → #${p.id}** lineage=0x${p.lineage.toString(16).padStart(6, '0')} ` +
+        `- **${item.title} → #${p.id}** face=0x${p.lineage.toString(16).padStart(6, '0')} genetic=0x${p.geneticKinTag.toString(16).padStart(6, '0')} ` +
           `cells=${p.cells} age=${p.age} mood=${MOOD_NAMES[p.nnDominant]} ` +
           `biomass=${p.biomass.toFixed(1)} E/cell=${p.meanEnergy.toFixed(2)} S/cell=${p.meanStomach.toFixed(2)} ` +
           `markers[e,d,s,m]=[${p.meanMarkers.map((v) => v.toFixed(1)).join(', ')}] ` +

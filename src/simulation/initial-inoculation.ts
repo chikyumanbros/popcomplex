@@ -3,12 +3,12 @@ import type { OrganismManager } from './organism';
 import type { RuleEvaluator } from './rule-evaluator';
 import { GRID_HEIGHT, GRID_WIDTH } from './constants';
 import type { Tape } from './tape';
-import { LINEAGE_BYTE_AUX } from './tape';
+import { LINEAGE_BYTE_AUX, syncGeneticKinFromPublic } from './tape';
 
 export interface InoculationSite {
   x: number;
   y: number;
-  /** Written to `LINEAGE_BYTE_AUX`; mixed into `getLineagePacked` so clades are kin-distinct with identical rules. */
+  /** Written to `LINEAGE_BYTE_AUX`; mixed into public kin tag so clades are face-distinct with identical rules. */
   cladeAux: number;
 }
 
@@ -112,7 +112,8 @@ export function spawnTricladProtos(
       }
       const tape = baseTape.clone();
       tape.data[LINEAGE_BYTE_AUX] = s.cladeAux & 0xff;
-      const id = world.spawnProto(x, y, tape.getLineagePacked(), spawnEnergyEach);
+      syncGeneticKinFromPublic(tape.data);
+      const id = world.spawnProto(x, y, tape.getPublicKinTagPacked(), spawnEnergyEach);
       organisms.register(id, tape, { parentId: null, birthTick: 0 });
       organisms.get(id)!.cells.add(y * GRID_WIDTH + x);
     }

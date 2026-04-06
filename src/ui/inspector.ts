@@ -46,7 +46,8 @@ export function setupInspector(
     const morphA = world.getMorphogenA(idx).toFixed(2).padStart(5, '\u2007');
     const morphB = world.getMorphogenB(idx).toFixed(2).padStart(5, '\u2007');
     const [mEat, mDigest, mSignal, mMove] = world.getMarkersByIdx(idx);
-    const lineageTape = org.tape.getLineagePacked() & 0xffffff;
+    const kinFaceTape = org.tape.getPublicKinTagPacked() & 0xffffff;
+    const kinGeneticTape = org.tape.getGeneticKinTagPacked() & 0xffffff;
     const lineageCell = world.cellData[idx * U32_PER_CELL + 7] & 0xffffff;
     const degradation = org.tape.degradation.reduce((a: number, b: number) => a + b, 0);
     const maxDeg = org.tape.degradation.length * 255;
@@ -89,7 +90,7 @@ export function setupInspector(
         <tr><td>Energy</td><td class="ins-num">${energy}</td><td>Stomach</td><td class="ins-num">${stomach}</td></tr>
         <tr><td>MorphA</td><td class="ins-num">${morphA}</td><td>MorphB</td><td class="ins-num">${morphB}</td></tr>
         <tr><td>Tape deg.</td><td class="ins-num">${degPercent}%</td><td>MaxCells</td><td class="ins-num">${maxCellS}</td></tr>
-        <tr><td colspan="4" class="ins-lineage">Lineage tape #${lineageTape.toString(16).padStart(6, '0')} · cell #${lineageCell.toString(16).padStart(6, '0')}</td></tr>
+        <tr><td colspan="4" class="ins-lineage">Kin face #${kinFaceTape.toString(16).padStart(6, '0')} · genetic #${kinGeneticTape.toString(16).padStart(6, '0')} · cell #${lineageCell.toString(16).padStart(6, '0')}</td></tr>
       </table>
       <div class="ins-markers">
         Markers  eat${mEatS}  dig${mDigestS}  sig${mSignalS}  move${mMoveS}

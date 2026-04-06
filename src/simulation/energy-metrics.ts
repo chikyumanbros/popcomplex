@@ -77,6 +77,7 @@ export interface PopulationMetrics {
 export function measurePopulationMetrics(world: World, organisms: OrganismManager): PopulationMetrics {
   let occupied = 0;
   let perimeterFaces = 0;
+  /** Per-cell **public** kin tag (synced from tape “face”); cryptic lineages can look merged here. */
   const lineageCounts = new Map<number, number>();
 
   for (let i = 0; i < TOTAL_CELLS; i++) {

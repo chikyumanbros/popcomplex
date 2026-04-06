@@ -16,8 +16,9 @@ The implementation style prioritizes quick run-observe-adjust loops over rigid u
 | `data` | Evolvable byte array holding rules, constants, and NN weights. |
 | `degradation` | Per-byte wear amount. Parent wear affects copy noise, but offspring start with zero wear. |
 | Data region (`0..31`) | Operation nodes (`0..15`) and literal pool (`16..31`); `4` is structural `maxCells`. |
-| Lineage bytes (`28..31`) | Bytes used for lineage/kin tint and clade-style identity. |
-| CA band (`32..63`) | Stores refractory seed (`byte 32` low nibble), replication key, and energy-cap modules. |
+| Public kin tag (`28..31`) | “Face”: packed 24-bit tag for **render tint** and **foreign kin trust** (`kinTrustForeign` lineageSim). |
+| Private genetic kin tag (`33..36`) | True clade signal in CA padding; **not** used in kin trust (mimicry: face can match while genetics diverge). If still unset (`0x80`×4, legacy snapshots), genetic packed equals public. |
+| CA band (`32..63`) | Refractory seed (`byte 32` low nibble), **33–36** genetic kin, energy-cap modules **48–59**, replication key **60–63**. |
 | `REPLICATION_KEY` (`60..63`) | Key bytes affecting reproduction viability; degradation/noise raises birth failure risk. |
 | `ENERGY_CAP_BANK` (`48..59`) | Encodes surviving module slots used to decode per-cell energy cap. |
 | Rule table (`64..127`) | 16 x 4-byte condition->action rows executed by the evaluator. |

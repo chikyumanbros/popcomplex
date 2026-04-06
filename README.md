@@ -9,6 +9,7 @@ This program is developed with **vibe coding** (AI-assisted iterative prototypin
 For an architecture/glossary explainer (Tape module, NN structure, and network structure), see:
 
 - `docs/tape-nn-network-explainer.md`
+- `docs/signal-morph-actions.md` — FIRE/SIG/EMIT marker bumps, feedback slots, distress FIRE vs table FIRE
 
 ## Requirements
 
@@ -111,7 +112,7 @@ Browser query options (examples):
 
 ## Tape layout (256B data + 256B degradation)
 
-Authoritative comments live in `src/simulation/tape.ts` at the top of the file. In short: bytes **0–31** are the evolvable data region (op-nodes, literals, maxCells at index 4, lineage **28–31** with byte 31 mixed into the packed 24-bit lineage tag); **32–63** is the CA band and replication key **60–63**; **64–127** holds **16** condition→action rules; **128–255** stores NN weight bytes.
+Authoritative comments live in `src/simulation/tape.ts` at the top of the file. In short: bytes **0–31** are the evolvable data region (op-nodes, literals, maxCells at index 4, **public kin tag 28–31** for render + foreign trust); **32–63** is the CA band (private genetic kin **33–36**, energy-cap **48–59**, replication key **60–63**); **64–127** holds **16** condition→action rules; **128–255** stores NN weight bytes.
 
 **`TAPE_SIZE = 256` is a fixed layout contract** — offsets (`CA_RULES_OFFSET`, `CONDITIONS_OFFSET`, NN block length, etc.) are chosen to fill the tape. Changing only `TAPE_SIZE` without reallocating those regions will break snapshots and semantics.
 

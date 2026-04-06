@@ -145,10 +145,10 @@ export class World {
     return id;
   }
 
-  /** Push each organism’s tape lineage tag into GPU field [7] for all its cells (kinship tint). */
+  /** Push each organism’s **public** kin tag (“face”) into GPU field [7] for all its cells (tint + neighbor trust). */
   syncLineageToCells(organisms: OrganismManager) {
     for (const org of organisms.organisms.values()) {
-      const p = org.tape.getLineagePacked() & 0xffffff;
+      const p = org.tape.getPublicKinTagPacked() & 0xffffff;
       for (const idx of org.cells) {
         this.cellData[idx * U32_PER_CELL + 7] = p;
       }

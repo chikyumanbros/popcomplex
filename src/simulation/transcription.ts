@@ -11,6 +11,10 @@ import {
   LINEAGE_BYTE_1,
   LINEAGE_BYTE_2,
   LINEAGE_BYTE_AUX,
+  GENETIC_KIN_BYTE_0,
+  GENETIC_KIN_BYTE_1,
+  GENETIC_KIN_BYTE_2,
+  GENETIC_KIN_BYTE_AUX,
 } from './tape';
 import { randomF32, randomInt } from './rng';
 import {
@@ -41,7 +45,8 @@ const READ_FETCH_ERROR = 0.00008; // 0.008% adjacent mis-fetch
 const RULE_DUP_RATE  = 0.03;  // 3% chance per rule to duplicate to another slot
 const RULE_SWAP_RATE = 0.015; // 1.5% chance to swap two rules
 const DATA_DUP_RATE  = 0.02;  // 2% chance per data byte to copy to random data slot
-const LINEAGE_DRIFT_RATE = 0.02; // per lineage byte after transcription
+const LINEAGE_DRIFT_RATE = 0.02; // per public / private kin byte after transcription
+const GENETIC_KIN_DRIFT_RATE = 0.017; // slightly slower than face — mimicry can persist longer
 
 /** Extra write/read noise on replication-key bytes scales with parent degradation on those bytes. */
 const KEY_WEAR_WRITE_MULT = 3.2;
@@ -92,9 +97,20 @@ function transcribeCore(parent: Tape): Uint8Array {
 }
 
 function applyLineageDrift(data: Uint8Array) {
-  const lineageBytes = [LINEAGE_BYTE_0, LINEAGE_BYTE_1, LINEAGE_BYTE_2, LINEAGE_BYTE_AUX];
-  for (const idx of lineageBytes) {
+  const publicKinBytes = [LINEAGE_BYTE_0, LINEAGE_BYTE_1, LINEAGE_BYTE_2, LINEAGE_BYTE_AUX];
+  for (const idx of publicKinBytes) {
     if (randomF32() < LINEAGE_DRIFT_RATE) {
+      data[idx] ^= 1 << randomInt(8);
+    }
+  }
+  const geneticKinBytes = [
+    GENETIC_KIN_BYTE_0,
+    GENETIC_KIN_BYTE_1,
+    GENETIC_KIN_BYTE_2,
+    GENETIC_KIN_BYTE_AUX,
+  ];
+  for (const idx of geneticKinBytes) {
+    if (randomF32() < GENETIC_KIN_DRIFT_RATE) {
       data[idx] ^= 1 << randomInt(8);
     }
   }
