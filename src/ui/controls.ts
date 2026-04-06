@@ -125,7 +125,7 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
     </div>
     <div class="control-row hint">
       Shift+click: inspect · Scroll: zoom · Middle-drag: pan<br>
-      <kbd>V</kbd>: cycle field view (default → env → morph → stomach → markers → energy) · <kbd>H</kbd>: toggle component highlight
+      <kbd>Space</kbd>: pause/resume · <kbd>V</kbd>: cycle field view · <kbd>H</kbd>: toggle component highlight
     </div>
     <div class="view-mode-banner" title="Press V to cycle — same as top-right header pill">
       <span class="view-mode-banner-label">Field view</span>
@@ -147,6 +147,11 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
     state.paused = !state.paused;
     document.getElementById('btn-pause')!.textContent = state.paused ? 'Resume' : 'Pause';
   });
+
+  function togglePause(): void {
+    state.paused = !state.paused;
+    document.getElementById('btn-pause')!.textContent = state.paused ? 'Resume' : 'Pause';
+  }
 
   document.getElementById('btn-step')!.addEventListener('click', () => {
     state.stepRequested = true;
@@ -217,6 +222,13 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
   });
 
   window.addEventListener('keydown', (e) => {
+    if (e.key === ' ') {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      togglePause();
+      return;
+    }
     if (e.key !== 'v' && e.key !== 'V') return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
