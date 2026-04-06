@@ -1669,10 +1669,14 @@ export class RuleEvaluator {
         world: this.world,
         envEnergy: this.envEnergy,
         suppressionMode: this.suppressionMode,
-        randomF32,
+        metabolicScale: this.metabolicScale,
         getCrowdingDissolveBonus,
         dissolveBase: DISSOLVE_BASE,
         dissolveSingleMult: DISSOLVE_SINGLE_MULT,
+        sameOrgConnectedGroupSize: (seedIdx, orgId) => this.sameOrgConnectedGroupSize(seedIdx, orgId),
+        gridWidth: GRID_WIDTH,
+        gridHeight: GRID_HEIGHT,
+        neighborModeEight: this.neighborMode === 'eight',
       },
       U32_PER_CELL,
     );
@@ -2034,6 +2038,8 @@ export class RuleEvaluator {
         data: this.world.cellData.slice(base, base + U32_PER_CELL),
       });
       for (let i = 0; i < U32_PER_CELL; i++) this.world.cellData[base + i] = 0;
+      this.world.ruleRoutes[idx] = 0;
+      this.world.rot[idx] = 0;
     }
     org.cells.clear();
     for (const s of snaps) {

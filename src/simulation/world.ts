@@ -11,11 +11,14 @@ export class World {
   cellData: Uint32Array;
   /** Per-cell local rule routing (3×u8 packed into u32). Used for same-org proxy execution / redundancy. */
   ruleRoutes: Uint32Array;
+  /** Per-cell decay gauge (0..1): deterministic rot progression when cell energy is dead. */
+  rot: Float32Array;
   nextOrganismId = 1;
 
   constructor() {
     this.cellData = new Uint32Array(TOTAL_CELLS * U32_PER_CELL);
     this.ruleRoutes = new Uint32Array(TOTAL_CELLS);
+    this.rot = new Float32Array(TOTAL_CELLS);
   }
 
   // --- positional helpers ---
@@ -36,6 +39,7 @@ export class World {
     this.cellData[b + 6] = 0;
     this.cellData[b + 7] = lineagePacked & 0xffffff;
     this.ruleRoutes[idx] = 0;
+    this.rot[idx] = 0;
   }
 
   getCellType(x: number, y: number): CellType {

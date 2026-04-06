@@ -2,7 +2,7 @@ export type NeighborMode = 'four' | 'eight';
 export type BudgetMode = 'global' | 'local';
 export type SuppressionMode = 'on' | 'off';
 /** Default URL `seed=` and headless default; design-gate scenarios use this among others. */
-export const DEFAULT_RUNTIME_SEED = 3462718379;
+export const DEFAULT_RUNTIME_SEED = 3467112274;
 
 export interface RuntimeConfig {
   seed: number;
