@@ -110,7 +110,6 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
       <button id="btn-seed-apply" type="button" title="Set ?seed= in the address bar and reload">Apply seed</button>
       <button id="btn-seed-random" type="button" title="Pick a random seed and reload">Random seed</button>
       <button id="btn-restart" type="button" title="Reload page; keeps current URL query (same seed / multiOrigin / etc.)">Restart</button>
-      <button id="btn-ai-handoff" type="button" title="Copy markdown report for AI / debugging">Copy AI report</button>
     </div>
     <div class="control-row">
       <label>Prompt:
@@ -120,7 +119,7 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
           <option value="tape">Tape health</option>
         </select>
       </label>
-      <button id="btn-ai-handoff-prompt" type="button" title="Copy report plus a ready-to-paste AI prompt">Copy AI report + prompt</button>
+      <button id="btn-ai-handoff-prompt" type="button" title="Copy report plus a ready-to-paste AI prompt">Copy AI handoff</button>
     </div>
     <div class="control-row hint">
       Shift+click: inspect · Scroll: zoom · Middle-drag: pan<br>

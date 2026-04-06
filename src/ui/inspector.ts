@@ -61,6 +61,9 @@ export function setupInspector(
 
     let tapeHtml = '<div class="tape-view">';
     const bpl = 16;
+    // Color thresholds: keep early “normal wear” uncolored; highlight only when wear likely matters for survival.
+    const WEAR_WARN = 32;
+    const WEAR_DANGER = 96;
     const regionLabels: Record<number, string> = { 0: '── data ──', 32: '── CA ──', 64: '── rules ──', 128: '── NN wt ──' };
     for (let off = 0; off < org.tape.data.length; off += bpl) {
       if (regionLabels[off]) tapeHtml += `<div style="color:#555">${regionLabels[off]}</div>`;
@@ -69,7 +72,7 @@ export function setupInspector(
         const i = off + b;
         const h = org.tape.data[i].toString(16).padStart(2, '0');
         const d = org.tape.degradation[i];
-        hex.push(d > 32 ? `<span class="corrupt-high">${h}</span>` : d > 0 ? `<span class="corrupt-low">${h}</span>` : h);
+        hex.push(d > WEAR_DANGER ? `<span class="corrupt-high">${h}</span>` : d > WEAR_WARN ? `<span class="corrupt-low">${h}</span>` : h);
       }
       tapeHtml += `<div>${off.toString(16).padStart(3, '0')}: ${hex.join(' ')}</div>`;
     }

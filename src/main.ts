@@ -246,10 +246,6 @@ async function main() {
     );
   }
 
-  document.getElementById('btn-ai-handoff')!.addEventListener('click', () => {
-    copyTextForAI(buildHandoffMarkdown());
-  });
-
   document.getElementById('btn-ai-handoff-prompt')!.addEventListener('click', () => {
     const presetEl = document.getElementById('ai-prompt-preset') as HTMLSelectElement | null;
     const preset = (presetEl?.value ?? 'review') as AIHandoffPromptPreset;

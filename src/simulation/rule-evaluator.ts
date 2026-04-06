@@ -52,9 +52,8 @@ import { spillStomachToNearbyEnv } from './behaviors/vent-actions';
 import {
   allowsForeignKinGive,
   canPassiveIntakeFromEnv,
-  foreignAbsorbInteraction,
   foreignKinCooperationEdgeOpen,
-  morphChannelsCompatible,
+  morphAbsorbAffinity,
 } from './metabolic-edge';
 
 const ORTH_DIRS: [number, number][] = [
@@ -136,11 +135,16 @@ const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_BASE = 0.24;
 const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN = 0.16;
 
 /**
- * ABSORB at a heterospecific face: if both morphogen channels are close on the two cells, relax cell
- * energies symmetrically toward their average (bidirectional “coupling”). Otherwise one-way drain to
- * actor’s stomach (predation). Thresholds align with kinTrust morph scale (~O(1) field).
+ * ABSORB at a heterospecific face: a single continuous interaction.
+ * - Morph affinity → more symmetric relax (cell↔cell equalization).
+ * - Mismatch → more stomach inflow (neighbor cell energy → actor stomach).
+ * - JAM acts like immunity: it dampens both good (relax) and bad (steal) coupling.
+ * - A “breaker” (immune inhibition) can reduce JAM effectiveness, at extra heat cost.
  */
-const ABSORB_BIDIR_RELAX = 0.26;
+const ABSORB_RELAX_RATE = 0.26;
+// Network-scaled immunity/breaking: use same-org connected group size near the acting cell.
+// No ecology-tuned coefficients: size enters via a saturating geometric term (1 - 1/sqrt(S)).
+const ABSORB_GROUP_SCAN_CAP = 256; // cap visited nodes for on-demand BFS (treat larger as saturated)
 const XENO_TAPE_TRANSFER_STOMACH_K = 2.4;  // stomach-gated integration: higher gut load raises transfer fixation odds
 const XENO_TAPE_TRANSFER_HEAT = 0.08;      // integration stress: small heat fee on successful transfer
 const XENO_TRANSFER_CONTACT_SCALE = 0.50;  // contact-route transfer intensity scale (smaller => stronger contact route)
@@ -1168,13 +1172,6 @@ export class RuleEvaluator {
     return false;
   }
 
-  /** True when morph A/B at two indices are both within match tolerance (symbiotic interface). */
-  private morphAbsorbCompatible(idxA: number, idxB: number): boolean {
-    const dA = Math.abs(this.world.getMorphogenA(idxA) - this.world.getMorphogenA(idxB));
-    const dB = Math.abs(this.world.getMorphogenB(idxA) - this.world.getMorphogenB(idxB));
-    return morphChannelsCompatible(dA, dB);
-  }
-
   private actionAbsorb(cell: CellCtx, maxSteal: number): boolean {
     for (const [dx, dy] of this.neighborDirs()) {
       const nx = cell.x + dx, ny = cell.y + dy;
@@ -1184,27 +1181,97 @@ export class RuleEvaluator {
       const nIdx = ny * GRID_WIDTH + nx;
       const ne = this.world.getCellEnergy(nx, ny);
 
-      const morphOk = this.morphAbsorbCompatible(cell.idx, nIdx);
-      const absorbMode = foreignAbsorbInteraction(morphOk, !this.foreignKinCooperationOpenBetween(cell.idx, nIdx));
-      if (absorbMode === 'bidirectional_relax') {
-        const eC = cell.energy;
-        if (eC <= 0 && ne <= 0) continue;
-        const avg = (eC + ne) / 2;
-        const r = ABSORB_BIDIR_RELAX;
-        const newC = Math.max(0, eC + r * (avg - eC));
-        const newN = Math.max(0, ne + r * (avg - ne));
-        cell.energy = this.setCellEnergyCapped(cell.x, cell.y, newC, cell.orgId);
-        this.setCellEnergyCapped(nx, ny, newN, nOrg);
-        const contactFlux = Math.abs(newC - eC);
-        this.tryHorizontalTapeTransfer(cell, nIdx, nOrg, contactFlux, Math.max(0.2, maxSteal * XENO_TRANSFER_CONTACT_SCALE));
-        return true;
+      const dA = Math.abs(this.world.getMorphogenA(cell.idx) - this.world.getMorphogenA(nIdx));
+      const dB = Math.abs(this.world.getMorphogenB(cell.idx) - this.world.getMorphogenB(nIdx));
+      const morphAffinity = morphAbsorbAffinity(dA, dB); // 0..1
+
+      // Connected-group scaling: bigger connected same-org groups express stronger immunity (JAM) and stronger breaking.
+      // Use a saturating geometric term (1 - 1/sqrt(S)) so the effect rises quickly then plateaus.
+      const groupSize = this.sameOrgConnectedGroupSize(cell.idx, cell.orgId);
+      const groupBoost = 1 - 1 / Math.sqrt(Math.max(1, groupSize)); // 0..~1
+
+      // JAM as immunity: dampen all ABSORB coupling. Larger groups make JAM more effective.
+      const jamStrength = Math.max(this.jamTicks[cell.idx], this.jamTicks[nIdx]) / 255; // 0..1
+      const jamEff = Math.min(1, jamStrength * (1 + groupBoost));
+
+      // Immune inhibition (breaking): grows with connected group size too, but costs heat proportional to the breaking.
+      // Use morphB only as a continuous "breaker presence" (0..1) without tunable scale.
+      const mB = (this.world.getMorphogenB(cell.idx) + this.world.getMorphogenB(nIdx)) * 0.5;
+      const breakerPresence = mB / (1 + Math.abs(mB)); // 0..1 for mB>=0 (fields are non-negative in practice)
+      const breakFrac = Math.min(1, breakerPresence * groupBoost); // 0..1
+
+      const effectiveJamStrength = jamEff * (1 - breakFrac);
+      const I = Math.max(0, Math.min(1, 1 - effectiveJamStrength)); // overall coupling intensity (0..1)
+
+      if (I <= 1e-6) continue;
+
+      // Single continuous interaction: steal-to-stomach vs relax-to-equalize.
+      const wRelax = morphAffinity;
+      const wSteal = 1 - morphAffinity;
+
+      // 1) Steal (neighbor cell energy -> actor stomach)
+      const steal = Math.min(ne, maxSteal * I * wSteal);
+      let neAfter = ne;
+      if (steal > 1e-8) {
+        neAfter = ne - steal;
+        this.setCellEnergyCapped(nx, ny, neAfter, nOrg);
+        this.stomachInflow(cell.idx, steal);
       }
 
-      const steal = Math.min(ne, maxSteal);
-      if (steal <= 0) continue;
-      this.setCellEnergyCapped(nx, ny, ne - steal, nOrg);
-      this.stomachInflow(cell.idx, steal);
-      this.tryHorizontalTapeTransfer(cell, nIdx, nOrg, steal, maxSteal);
+      // 2) Relax (symmetric equalization), bounded by availability and caps to preserve conservation.
+      const eC = cell.energy;
+      const capC = this.safeCellEnergyCapForOrg(cell.orgId);
+      const capN = this.safeCellEnergyCapForOrg(nOrg);
+      const r = ABSORB_RELAX_RATE * I * wRelax;
+      let moved = 0;
+      if (r > 1e-8 && (eC > 0 || neAfter > 0)) {
+        // Move a fraction of the difference this tick (like a resistive coupling).
+        const diff = neAfter - eC;
+        if (Math.abs(diff) > 1e-9) {
+          let delta = r * diff; // +: neighbor->cell, -: cell->neighbor
+          if (delta > 0) {
+            delta = Math.min(delta, neAfter);          // can't take more than neighbor has
+            delta = Math.min(delta, capC - eC);        // can't exceed receiver cap
+            if (delta > 1e-9) {
+              this.setCellEnergyCapped(nx, ny, neAfter - delta, nOrg);
+              cell.energy = this.setCellEnergyCapped(cell.x, cell.y, eC + delta, cell.orgId);
+              moved = delta;
+            }
+          } else {
+            let amt = Math.min(-delta, eC);            // can't take more than cell has
+            amt = Math.min(amt, capN - neAfter);       // can't exceed neighbor cap
+            if (amt > 1e-9) {
+              cell.energy = this.setCellEnergyCapped(cell.x, cell.y, eC - amt, cell.orgId);
+              this.setCellEnergyCapped(nx, ny, neAfter + amt, nOrg);
+              moved = amt;
+            }
+          }
+        }
+      }
+
+      // Break-jam inflammation heat: only when jam exists; proportional to how much JAM was suppressed.
+      const jamSuppressed = Math.max(0, jamEff - effectiveJamStrength);
+      const flux = steal + moved;
+      if (jamSuppressed > 1e-6 && flux > 1e-8) {
+        // Reuse existing "integration stress" scale for a conservative heat cost.
+        const heat = XENO_TAPE_TRANSFER_HEAT * jamSuppressed * flux;
+        const fee = Math.min(cell.energy, heat);
+        if (fee > 1e-9) {
+          cell.energy -= fee;
+          cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
+          this.envEnergy[cell.idx] += fee;
+        }
+      }
+
+      // HGT drive: treat contact flux as combined interface interaction magnitude.
+      const contactFlux = flux;
+      this.tryHorizontalTapeTransfer(
+        cell,
+        nIdx,
+        nOrg,
+        contactFlux,
+        Math.max(0.2, maxSteal * XENO_TRANSFER_CONTACT_SCALE),
+      );
       return true;
     }
     return false;
@@ -1249,6 +1316,32 @@ export class RuleEvaluator {
     return this.jamTicks[aIdx] > 0 || this.jamTicks[bIdx] > 0;
   }
 
+  /** On-demand same-org connected component size around `seedIdx` (bounded by `cap` for performance). */
+  private sameOrgConnectedGroupSize(seedIdx: number, orgId: number, cap = ABSORB_GROUP_SCAN_CAP): number {
+    if (orgId <= 0) return 1;
+    const dirs = this.neighborDirs();
+    const seen = new Set<number>();
+    const q: number[] = [seedIdx];
+    seen.add(seedIdx);
+    while (q.length > 0 && seen.size < cap) {
+      const idx = q.pop()!;
+      const x = idx % GRID_WIDTH;
+      const y = (idx - x) / GRID_WIDTH;
+      for (const [dx, dy] of dirs) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+        const ni = ny * GRID_WIDTH + nx;
+        if (seen.has(ni)) continue;
+        if (this.world.getOrganismIdByIdx(ni) !== orgId) continue;
+        if (this.world.getCellTypeByIdx(ni) === CellType.Empty) continue;
+        seen.add(ni);
+        q.push(ni);
+        if (seen.size >= cap) break;
+      }
+    }
+    return seen.size;
+  }
+
   /** Cross-lineage cooperation allowed on this neighbor edge (GIVE, foreign kin REPAIR quorum, HGT); false when either cell is JAM-tagged. */
   private foreignKinCooperationOpenBetween(aIdx: number, bIdx: number): boolean {
     return foreignKinCooperationEdgeOpen(this.isEdgeJammed(aIdx, bIdx));
@@ -1262,19 +1355,19 @@ export class RuleEvaluator {
     cell: CellCtx,
     donorIdx: number,
     donorOrgId: number,
-    steal: number,
+    contactFlux: number,
     maxSteal: number,
   ): void {
     if (!this.foreignKinCooperationOpenBetween(cell.idx, donorIdx)) return;
     const hostOrg = this.organisms.get(cell.orgId);
     const donorOrg = this.organisms.get(donorOrgId);
     if (!hostOrg || !donorOrg) return;
-    if (steal <= 0.02 || maxSteal <= 0) return;
+    if (contactFlux <= 0.02 || maxSteal <= 0) return;
 
     const trust = this.kinTrustForeign(cell.idx, donorIdx, cell.orgId);
     const repairDefense = this.repairQuorumKin(cell);
     const contactPressure = this.foreignContactPressure(cell);
-    const stealFactor = Math.min(1, steal / Math.max(0.01, maxSteal));
+    const stealFactor = Math.min(1, contactFlux / Math.max(0.01, maxSteal));
     const gut = this.world.getStomachByIdx(cell.idx);
     const stomachFactor = gut / (gut + XENO_TAPE_TRANSFER_STOMACH_K);
     const interfaceGain = 0.2 + 0.8 * contactPressure;

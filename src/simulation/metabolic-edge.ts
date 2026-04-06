@@ -1,6 +1,6 @@
 /**
- * Foreign-edge predicates (neighbor grid): morph absorb branch, passive intake, kin GIVE, and JAM-gated cooperation.
- * Spatial graph is still the neighbor grid; predation steal intentionally bypasses some cooperation gates — see `foreignAbsorbInteraction`.
+ * Foreign-edge predicates (neighbor grid): ABSORB coupling affinity, passive intake, kin GIVE, and JAM-gated cooperation.
+ * Spatial graph is still the neighbor grid.
  */
 
 /** Max |Δmorph| for bidirectional relax branch of ABSORB (symbiotic interface). */
@@ -11,15 +11,25 @@ export function morphChannelsCompatible(absDeltaA: number, absDeltaB: number): b
   return absDeltaA <= MORPH_ABSORB_MATCH_A && absDeltaB <= MORPH_ABSORB_MATCH_B;
 }
 
-export type ForeignAbsorbInteraction = 'bidirectional_relax' | 'predation_steal';
+function clamp01(x: number): number {
+  return Math.max(0, Math.min(1, x));
+}
 
 /**
- * ABSORB at a heterospecific face: morph match + not jammed → relax; else predation to actor stomach.
- * Jam blocks the symbiotic branch only; predation still applies (legacy behavior).
+ * 0..1 morph affinity for ABSORB coupling, based on both channels' absolute deltas.
+ * Uses a smooth exponential kernel so the interaction varies continuously rather than switching modes.
+ *
+ * Typical usage: `affinity≈1` means strong symmetric relax component; `affinity≈0` means strong stomach-steal component.
  */
-export function foreignAbsorbInteraction(morphCompatible: boolean, edgeJammed: boolean): ForeignAbsorbInteraction {
-  if (morphCompatible && !edgeJammed) return 'bidirectional_relax';
-  return 'predation_steal';
+export function morphAbsorbAffinity(absDeltaA: number, absDeltaB: number): number {
+  const a = MORPH_ABSORB_MATCH_A;
+  const b = MORPH_ABSORB_MATCH_B;
+  // exp(-((dA/a)^2 + (dB/b)^2)) : 1 at perfect match, smoothly decays with mismatch.
+  const x = (absDeltaA / a);
+  const y = (absDeltaB / b);
+  const g = Math.exp(-(x * x + y * y));
+  // Avoid denorm/NaN surprises.
+  return Number.isFinite(g) ? clamp01(g) : 0;
 }
 
 /**
