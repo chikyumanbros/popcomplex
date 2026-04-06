@@ -118,9 +118,34 @@ In the current build, GPU compute shaders are not the source of truth for simula
 
 ---
 
+## 4) Energy / Metabolism (Authoritative Invariants)
+
+These are **implementation-true** laws for reasoning about transfers (see `simulationTick` in `main.ts` and `RuleEvaluator`).
+
+1. **Closed budget**: Each tick, `sum(envEnergy) + sum(cell energy) + sum(stomach)` matches `ecosystemEnergyBudget` after enforcement.
+2. **Environment → organism intake**: Flow from `envEnergy` into the organism goes through **`stomachInflow`** (passive absorb + `EAT`). No direct `env → cellEnergy` shortcut.
+3. **Stomach → cell gate**: Net movement from stomach buffer into cell energy runs in **`digestPhase()`** only. The **`DIGEST` opcode** only raises per-cell `digestRuleBoost` consumed there; it does not immediately move energy.
+4. **Direct cell↔cell**: Same-organism `GIVE` / `TAKE` move **cell energy** between neighbors. Xenogeneic direct paths exist only where the evaluator allows them (e.g. kin-trust `GIVE`); predation steal paths use **actor stomach** (`stomachInflow`).
+5. **Stomach overflow**: `stomachInflow` clamps to cap; excess returns to **local `envEnergy`** (closed budget).
+
+Digestion module corruption: if `Tape.isDigestModuleIntact()` is false, `digestPhase` skips that organism’s cells, but EAT/passive intake can still fill stomach (converter off, buffer may fill).
+
+**JAM vs cross-lineage cooperation**: `foreignKinCooperationEdgeOpen(!jammed)` gates **kin-trust foreign `GIVE`**, **foreign kin weight in REPAIR quorum**, and **horizontal tape transfer (HGT)** at the absorb interface. On a jammed edge, **bidirectional morph ABSORB relax** is also off; **predation steal** to stomach still runs (see `foreignAbsorbInteraction`).
+
+---
+
+## 5) Rule Table: Scan Order and Chain Flag
+
+- **Scan order**: For each cell, rules are visited in a **rotated** order: start index = `(simTick + cellIdx + orgId) % ruleCount`, then wrap through all rules once. Not always row `0` first.
+- **Multiple firings**: The loop does not stop after the first successful action (except **MOVE** invalidates further evaluation for that cell in the same tick by returning early).
+- **Chain bit**: Condition flag **bit 6** (`0x40`). If set and the condition passes, **no action runs**; `chainPassed` becomes true for the **next** rule, which must also pass its condition before an action can execute. **`NOP` clears** the chain. This is **logical chaining**, not spatial connectivity (contrast with morphological neighbors in §3).
+
+---
+
 ## Reference Files
 
 - `src/simulation/tape.ts`
+- `src/simulation/metabolic-edge.ts` — morph match thresholds, `foreignAbsorbInteraction`, `canPassiveIntakeFromEnv`, `allowsForeignKinGive`, `foreignKinCooperationEdgeOpen`
 - `src/simulation/neural-network.ts`
 - `src/simulation/organism.ts`
 - `src/simulation/rule-evaluator.ts`

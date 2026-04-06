@@ -321,7 +321,9 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   }
   lines.push('');
 
-  lines.push('### Physics / tuning (intended behaviour; verify in `rule-evaluator.ts`)');
+  lines.push(
+    '### Physics / tuning (intended behaviour; verify in `rule-evaluator.ts`; cross-lineage edge policy in `metabolic-edge.ts`)',
+  );
   lines.push('- Metabolic: `BASE_METABOLIC` + `CROWD_METABOLIC * sqrt(N)` × dominance multiplier when org share > ~8% of live cells, then × isolation multiplier (`1 + ISOLATION_METABOLIC_PENALTY * (1 - sameOrthNeighbors/4)`).');
   lines.push('- **Per-organism overhead**: each lineage pays a fixed energy/tick from its biomass → env (1-cell pays same as big colony per lineage → selection vs fragment spam).');
   lines.push('- Reproduce: `MIN_CELLS_TO_REPRODUCE=2`, cooldown ~40 ticks, dominance fail + **global crowding fail** when organism count is high.');

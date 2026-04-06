@@ -49,6 +49,13 @@ import {
   countRepulsionFacesForShift,
 } from './behaviors/exclusion-actions';
 import { spillStomachToNearbyEnv } from './behaviors/vent-actions';
+import {
+  allowsForeignKinGive,
+  canPassiveIntakeFromEnv,
+  foreignAbsorbInteraction,
+  foreignKinCooperationEdgeOpen,
+  morphChannelsCompatible,
+} from './metabolic-edge';
 
 const ORTH_DIRS: [number, number][] = [
   [0, -1],
@@ -131,8 +138,6 @@ const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN = 0.16;
  * energies symmetrically toward their average (bidirectional “coupling”). Otherwise one-way drain to
  * actor’s stomach (predation). Thresholds align with kinTrust morph scale (~O(1) field).
  */
-const MORPH_ABSORB_MATCH_A = 1.7;
-const MORPH_ABSORB_MATCH_B = 1.7;
 const ABSORB_BIDIR_RELAX = 0.26;
 const XENO_TAPE_TRANSFER_STOMACH_K = 2.4;  // stomach-gated integration: higher gut load raises transfer fixation odds
 const XENO_TAPE_TRANSFER_HEAT = 0.08;      // integration stress: small heat fee on successful transfer
@@ -755,7 +760,7 @@ export class RuleEvaluator {
   // ==================== ACTIONS ====================
 
   private passiveAbsorb(cell: CellCtx, orgSize = 1) {
-    if (cell.energy <= 0) return;
+    if (!canPassiveIntakeFromEnv(cell.energy, this.world.getStomachByIdx(cell.idx))) return;
     const coordination = Math.min(1, orgSize / 3); // 1-cell=33%, 3+=100%
     const avail = this.envEnergy[cell.idx];
     const take = Math.min(avail * 0.05, PASSIVE_ABSORB_RATE) * coordination;
@@ -849,7 +854,9 @@ export class RuleEvaluator {
       const nOrg = this.world.getOrganismIdByIdx(nIdx);
       if (nOrg === 0) continue;
       if (nOrg === cell.orgId) sum += 1;
-      else sum += this.kinTrustForeign(cell.idx, nIdx, cell.orgId) * REPAIR_FOREIGN_KIN_WEIGHT;
+      else if (this.foreignKinCooperationOpenBetween(cell.idx, nIdx)) {
+        sum += this.kinTrustForeign(cell.idx, nIdx, cell.orgId) * REPAIR_FOREIGN_KIN_WEIGHT;
+      }
     }
     return sum;
   }
@@ -919,8 +926,9 @@ export class RuleEvaluator {
           heat += loss;
         }
       } else {
+        if (!this.foreignKinCooperationOpenBetween(cell.idx, nIdx)) continue;
         const t = this.kinTrustForeign(cell.idx, nIdx, cell.orgId);
-        if (t < KIN_GIVE_MIN_TRUST) continue;
+        if (!allowsForeignKinGive(t, KIN_GIVE_MIN_TRUST)) continue;
         const pushPerN = basePush * t * KIN_GIVE_RATE_CAP;
         if (pushPerN < 0.12) continue;
         if (ne < cell.energy - pushPerN) {
@@ -1138,7 +1146,7 @@ export class RuleEvaluator {
   private morphAbsorbCompatible(idxA: number, idxB: number): boolean {
     const dA = Math.abs(this.world.getMorphogenA(idxA) - this.world.getMorphogenA(idxB));
     const dB = Math.abs(this.world.getMorphogenB(idxA) - this.world.getMorphogenB(idxB));
-    return dA <= MORPH_ABSORB_MATCH_A && dB <= MORPH_ABSORB_MATCH_B;
+    return morphChannelsCompatible(dA, dB);
   }
 
   private actionAbsorb(cell: CellCtx, maxSteal: number): boolean {
@@ -1150,7 +1158,9 @@ export class RuleEvaluator {
       const nIdx = ny * GRID_WIDTH + nx;
       const ne = this.world.getCellEnergy(nx, ny);
 
-      if (this.morphAbsorbCompatible(cell.idx, nIdx) && !this.isEdgeJammed(cell.idx, nIdx)) {
+      const morphOk = this.morphAbsorbCompatible(cell.idx, nIdx);
+      const absorbMode = foreignAbsorbInteraction(morphOk, !this.foreignKinCooperationOpenBetween(cell.idx, nIdx));
+      if (absorbMode === 'bidirectional_relax') {
         const eC = cell.energy;
         if (eC <= 0 && ne <= 0) continue;
         const avg = (eC + ne) / 2;
@@ -1213,6 +1223,11 @@ export class RuleEvaluator {
     return this.jamTicks[aIdx] > 0 || this.jamTicks[bIdx] > 0;
   }
 
+  /** Cross-lineage cooperation allowed on this neighbor edge (GIVE, foreign kin REPAIR quorum, HGT); false when either cell is JAM-tagged. */
+  private foreignKinCooperationOpenBetween(aIdx: number, bIdx: number): boolean {
+    return foreignKinCooperationEdgeOpen(this.isEdgeJammed(aIdx, bIdx));
+  }
+
   /**
    * Low-rate cross-lineage tape transfer ("infection-like" HGT) at predatory absorb interface.
    * Transfer is resisted by local REPAIR quorum and paid as a small heat fee on success.
@@ -1224,7 +1239,7 @@ export class RuleEvaluator {
     steal: number,
     maxSteal: number,
   ): void {
-    if (this.isEdgeJammed(cell.idx, donorIdx)) return;
+    if (!this.foreignKinCooperationOpenBetween(cell.idx, donorIdx)) return;
     const hostOrg = this.organisms.get(cell.orgId);
     const donorOrg = this.organisms.get(donorOrgId);
     if (!hostOrg || !donorOrg) return;
@@ -1263,7 +1278,7 @@ export class RuleEvaluator {
     }
   }
 
-  /** 0..1: foreign-face share among occupied neighbors around host cell. */
+  /** 0..1: share of occupied neighbors that are heterospecific (HGT drive); not per-edge JAM-gated. */
   private foreignContactPressure(cell: CellCtx): number {
     return computeForeignContactPressure(
       cell,
@@ -1699,6 +1714,7 @@ export class RuleEvaluator {
     );
   }
 
+  /** Per tick: move cell energy to env proportional to orthogonal heterospecific faces. Intentionally not gated by JAM (ambient leak vs morph symbiosis in `foreignAbsorbInteraction`). */
   private applyForeignInterfaceMetabolism(idx: number, orgId: number) {
     const faces = this.countForeignOrthFacesAtIdx(idx, orgId);
     if (faces <= 0) return;
