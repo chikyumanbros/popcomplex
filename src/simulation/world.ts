@@ -9,10 +9,13 @@ const _u32 = new Uint32Array(_f32.buffer);
 
 export class World {
   cellData: Uint32Array;
+  /** Per-cell local rule routing (3×u8 packed into u32). Used for same-org proxy execution / redundancy. */
+  ruleRoutes: Uint32Array;
   nextOrganismId = 1;
 
   constructor() {
     this.cellData = new Uint32Array(TOTAL_CELLS * U32_PER_CELL);
+    this.ruleRoutes = new Uint32Array(TOTAL_CELLS);
   }
 
   // --- positional helpers ---
@@ -22,6 +25,7 @@ export class World {
 
   setCell(x: number, y: number, orgId: number, cellType: CellType, energy: number, lineagePacked = 0) {
     const b = this.base(x, y);
+    const idx = y * GRID_WIDTH + x;
     this.cellData[b] = orgId;
     this.cellData[b + 1] = cellType & 0xFF;
     _f32[0] = energy;
@@ -31,6 +35,7 @@ export class World {
     this.cellData[b + 5] = 0;
     this.cellData[b + 6] = 0;
     this.cellData[b + 7] = lineagePacked & 0xffffff;
+    this.ruleRoutes[idx] = 0;
   }
 
   getCellType(x: number, y: number): CellType {
@@ -115,6 +120,16 @@ export class World {
 
   getMarkerByIdx(idx: number, slot: 0 | 1 | 2 | 3): number {
     return (this.cellData[idx * U32_PER_CELL + 3] >> (slot * 8)) & 0xFF;
+  }
+
+  /** Local routing table for proxy rule execution: returns three donor rule indices (0..MAX_RULES-1). */
+  getRuleRoutesByIdx(idx: number): [number, number, number] {
+    const p = this.ruleRoutes[idx] >>> 0;
+    return [p & 0xff, (p >>> 8) & 0xff, (p >>> 16) & 0xff];
+  }
+
+  setRuleRoutesByIdx(idx: number, r0: number, r1: number, r2: number) {
+    this.ruleRoutes[idx] = ((r0 & 0xff) | ((r1 & 0xff) << 8) | ((r2 & 0xff) << 16)) >>> 0;
   }
 
   // Morphogen A stored in field [5], Morphogen B in field [6]

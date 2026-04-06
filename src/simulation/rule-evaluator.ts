@@ -4,6 +4,8 @@ import {
   CONDITIONS_OFFSET,
   MAX_RULES,
   MAX_VALID_ACTION_OPCODE,
+  REPLICATION_KEY_LEN,
+  REPLICATION_KEY_OFFSET,
   RULE_SIZE,
   STOMACH_CAP_BASE,
   TAPE_SIZE,
@@ -12,7 +14,7 @@ import {
   type ReadCtx,
   FEEDBACK_SLOTS,
 } from './tape';
-import { transcribeForReproduction } from './transcription';
+import { transcribeForReproductionOutcome } from './transcription';
 import { type World, U32_PER_CELL } from './world';
 import { type Organism, type OrganismManager, NN_OUTPUT, NN_MOVE } from './organism';
 import { randomF32 } from './rng';
@@ -50,10 +52,20 @@ import {
 } from './behaviors/exclusion-actions';
 import { spillStomachToNearbyEnv } from './behaviors/vent-actions';
 import {
+  computeAbsorbEdgeScalars,
+  computeGroupBoostFromSize,
+  computeJamStrengthOnEdge,
+  computeHgtDriveDefense,
+  sameOrgConnectedGroupSize as computeSameOrgConnectedGroupSize,
+  DEFAULT_GROUP_SCAN_CAP,
+} from './behaviors/foreign-edge';
+import { runDigestPhase } from './phases/digest-phase';
+import { applyMetabolicCostPhase, applyOrganismOverheadPhase } from './phases/metabolism-phase';
+import { cleanupDeadOrganismsPhase } from './phases/cleanup-phase';
+import {
   allowsForeignKinGive,
   canPassiveIntakeFromEnv,
   foreignKinCooperationEdgeOpen,
-  morphAbsorbAffinity,
 } from './metabolic-edge';
 
 const ORTH_DIRS: [number, number][] = [
@@ -86,7 +98,14 @@ function popcount24(v: number): number {
 // Tape REPAIR (immune): same-org neighbor quorum boosts success (collective error correction bias)
 const REPAIR_NEIGHBOR_COEFF = 0.16; // success mult += coeff * sameOrthogonalNeighbors (0..4)
 const REPAIR_BASE_P         = 0.36; // base success before bias × intensity
-const REPAIR_DEG_HEAL       = 36;   // degradation subtracted on success
+// REPAIR is meant to be "life-extending error correction", not instant restoration.
+const REPAIR_DEG_HEAL       = 12;   // degradation subtracted on success (primary byte)
+const REPAIR_DEG_HEAL_SPREAD_FRAC = 0.25; // small neighborhood "reflow" per success
+const REPAIR_RULE_BYPASS_BASE_P = 0.18;   // quorum-gated: copy a good rule into a broken slot (re-route)
+
+// Proxy execution / fail-soft is "distributed redundancy": it should cost something, especially under harsh metabolism.
+const PROXY_EXEC_TAX_BASE = 0.12; // energy units paid to env per proxy attempt (scaled)
+const FAILSOFT_TAX_BASE = 0.18;   // energy units paid to env on fail-soft idle action (scaled)
 
 // Cross-org “kin” trust: public kin tag on cell (tape bytes 28–31, “face”) + signal marker + morph A — all must roughly match (face-only mimicry stays weak; private genetic bytes 33–36 are not used here).
 const KIN_TRUST_CAP_FOREIGN      = 0.52;
@@ -142,9 +161,8 @@ const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN = 0.16;
  * - A “breaker” (immune inhibition) can reduce JAM effectiveness, at extra heat cost.
  */
 const ABSORB_RELAX_RATE = 0.26;
-// Network-scaled immunity/breaking: use same-org connected group size near the acting cell.
-// No ecology-tuned coefficients: size enters via a saturating geometric term (1 - 1/sqrt(S)).
-const ABSORB_GROUP_SCAN_CAP = 256; // cap visited nodes for on-demand BFS (treat larger as saturated)
+// Network-scaled immunity/breaking: use same-org connected group size near the acting cell (bounded scan).
+const ABSORB_GROUP_SCAN_CAP = DEFAULT_GROUP_SCAN_CAP;
 const XENO_TAPE_TRANSFER_STOMACH_K = 2.4;  // stomach-gated integration: higher gut load raises transfer fixation odds
 const XENO_TAPE_TRANSFER_HEAT = 0.08;      // integration stress: small heat fee on successful transfer
 const XENO_TRANSFER_CONTACT_SCALE = 0.50;  // contact-route transfer intensity scale (smaller => stronger contact route)
@@ -223,6 +241,7 @@ export class RuleEvaluator {
   private metabolicScale: number;
   private distressFireChanceScale: number;
   private jamTicks: Uint8Array;
+  private groupSizeCache: Map<number, number> = new Map();
   private static readonly BROKEN_CAP_FALLBACK = 0;
 
   /**
@@ -507,6 +526,7 @@ export class RuleEvaluator {
   // ==================== MAIN TICK ====================
   evaluate() {
     this.simTick++;
+    this.groupSizeCache.clear();
     for (let i = 0; i < TOTAL_CELLS; i++) {
       if (this.jamTicks[i] > 0) this.jamTicks[i]--;
     }
@@ -573,6 +593,37 @@ export class RuleEvaluator {
 
     const ruleCount = tape.getRuleCount();
     let chainPassed = false; // chain bit: previous rule's condition passed
+    let executedAny = false;
+    let nopSeen = 0;
+
+    const tryExecuteRuleIndex = (r: number, opts?: { isProxy?: boolean }): boolean => {
+      const rawOpcode = tape.data[CONDITIONS_OFFSET + r * RULE_SIZE + 2] & 0xff;
+      if (rawOpcode === ActionOpcode.NOP || rawOpcode > MAX_VALID_ACTION_OPCODE) return false;
+      const rule = tape.getRule(r);
+      if (rule.actionOpcode === ActionOpcode.NOP) return false;
+      if ((rule.conditionFlags & 0x40) !== 0) return false; // don't proxy-execute chain stubs
+      if (!this.checkCondition(rule, cell, org)) return false;
+      const cost = this.getActionCost(rule.actionOpcode);
+      if (cell.energy < cost + 0.5) return false;
+      const ok = this.executeAction(rule, cell, org, tape);
+      if (ok) {
+        recordActionExecution(rule.actionOpcode);
+        if (cost > 0) this.spendEnergy(cell, cost);
+        if (opts?.isProxy) {
+          const tax = Math.min(
+            cell.energy,
+            PROXY_EXEC_TAX_BASE * (0.6 + 0.8 * this.metabolicScale),
+          );
+          if (tax > 1e-9) {
+            cell.energy -= tax;
+            cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
+            this.envEnergy[cell.idx] += tax;
+          }
+        }
+      }
+      tape.applyActionWear(r);
+      return ok;
+    };
 
     const startRule = (this.simTick + cell.idx + org.id) % ruleCount;
     for (let ro = 0; ro < ruleCount; ro++) {
@@ -580,7 +631,7 @@ export class RuleEvaluator {
       const rawOpcode = tape.data[CONDITIONS_OFFSET + r * RULE_SIZE + 2] & 0xff;
       this.payRuleScanTax(cell, rawOpcode);
       const rule = tape.getRule(r);
-      if (rule.actionOpcode === ActionOpcode.NOP) { chainPassed = false; continue; }
+      if (rule.actionOpcode === ActionOpcode.NOP) { chainPassed = false; nopSeen++; continue; }
 
       const isChain = (rule.conditionFlags & 0x40) !== 0; // bit 6
 
@@ -606,11 +657,54 @@ export class RuleEvaluator {
       if (success) {
         recordActionExecution(rule.actionOpcode);
         if (cost > 0) this.spendEnergy(cell, cost);
+        executedAny = true;
       }
       tape.applyActionWear(r);
 
       if (rule.actionOpcode === ActionOpcode.MOVE && this.movedThisTick.has(org.id)) {
         return true;
+      }
+    }
+
+    // Same-org proxy execution: if this cell executed nothing, borrow "routes" as redundant wiring.
+    // Network-scale: larger connected tissue gets more chances to find a working donor circuit.
+    if (!executedAny && ruleCount > 0) {
+      // Proxy execution is a "redundancy luxury": when starving, it should not dominate ecology.
+      const energyGate = Math.max(0, Math.min(1, (cell.energy - 2) / 6)); // e<=2 =>0, e>=8 =>1
+      if (energyGate > 1e-6) {
+        const groupSize = this.sameOrgConnectedGroupSize(cell.idx, org.id);
+        const proxyTriesBase = Math.max(0, Math.min(3, 1 + Math.floor(Math.log2(Math.max(1, groupSize)) / 2)));
+        const proxyTries = Math.floor(proxyTriesBase * energyGate);
+        if (proxyTries > 0) {
+          const [r0, r1, r2] = this.world.getRuleRoutesByIdx(cell.idx);
+          const routes = [r0 % ruleCount, r1 % ruleCount, r2 % ruleCount];
+          for (let i = 0; i < Math.min(proxyTries, routes.length); i++) {
+            if (tryExecuteRuleIndex(routes[i]!, { isProxy: true })) { executedAny = true; break; }
+          }
+        }
+      }
+    }
+
+    // Fail-soft idle: if the rule table is mostly silent (NOP) and nothing executed, occasionally do a tiny
+    // self-preserving action so "broken but driving" systems can limp on.
+    if (!executedAny && ruleCount > 0) {
+      const nopFrac = nopSeen / ruleCount;
+      const energyGate = Math.max(0, Math.min(1, (cell.energy - 1) / 8)); // starving => very rare
+      const idleP = Math.max(0, Math.min(0.06, (nopFrac - 0.6) * 0.14)) * energyGate;
+      if (idleP > 1e-6 && randomF32() < idleP) {
+        // Prefer digesting existing stomach content; otherwise attempt a small eat.
+        const did = this.actionDigest(cell, org, 0.12) || this.actionEat(cell, 1.0, org.cells.size);
+        if (did) {
+          const tax = Math.min(
+            cell.energy,
+            FAILSOFT_TAX_BASE * (0.6 + 0.8 * this.metabolicScale),
+          );
+          if (tax > 1e-9) {
+            cell.energy -= tax;
+            cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
+            this.envEnergy[cell.idx] += tax;
+          }
+        }
       }
     }
     return false;
@@ -778,11 +872,14 @@ export class RuleEvaluator {
     this.stomachInflow(cell.idx, take);
   }
 
-  private actionEat(cell: CellCtx, maxGather: number, orgSize = 1) {
+  private actionEat(cell: CellCtx, maxGather: number, orgSize = 1): boolean {
     const specBonus = 1 + this.world.getMarkerByIdx(cell.idx, MARKER_EAT) / 255;
+    // Active feeding should require "working tissue": if you have 0 energy, you can't do work.
+    if (cell.energy < 0.8) return false;
     const vitality = Math.min(1, cell.energy / 5);
     const coordination = Math.min(1, orgSize / 3); // 1-cell=33%, 2-cell=67%, 3+=100%
-    const maxEat = maxGather * (0.3 + 0.7 * vitality) * specBonus * coordination;
+    // No baseline intake at zero vitality; passiveAbsorb covers the "inert soaking" path.
+    const maxEat = maxGather * vitality * specBonus * coordination;
     let gathered = 0;
     const spots: [number, number][] = [
       [cell.x, cell.y],
@@ -802,6 +899,7 @@ export class RuleEvaluator {
     if (gathered > 0) {
       this.stomachInflow(cell.idx, gathered);
     }
+    return gathered > 0;
   }
 
   /**
@@ -922,11 +1020,75 @@ export class RuleEvaluator {
     const pTry = Math.min(0.93, REPAIR_BASE_P * bias * inten * socialBias);
     if (randomF32() > pTry) return false;
 
+    // Update local proxy routes toward this repaired site (distributed redundancy wiring).
+    if (idx >= CONDITIONS_OFFSET && idx < CONDITIONS_OFFSET + MAX_RULES * RULE_SIZE) {
+      const repairedRule = Math.floor((idx - CONDITIONS_OFFSET) / RULE_SIZE) & 0xff;
+      const [r0, r1, r2] = this.world.getRuleRoutesByIdx(cell.idx);
+      const quorum01 = Math.max(0, Math.min(1, kinSum / 4));
+      // High quorum makes rewiring more stable; low quorum jitters more.
+      const jitterP = Math.max(0, 0.35 - 0.28 * quorum01);
+      let a = r0, b = r1, c = r2;
+      if (randomF32() < 0.65 + 0.3 * quorum01) {
+        // rotate-in the repaired rule (local memory of what's being worked on)
+        c = b;
+        b = a;
+        a = repairedRule;
+      }
+      if (randomF32() < jitterP) {
+        // small random drift (analog wiring)
+        b = (b + (randomF32() < 0.5 ? 1 : MAX_RULES - 1)) & 0xff;
+      }
+      this.world.setRuleRoutesByIdx(cell.idx, a, b, c);
+    }
+
+    // 1) If a rule opcode byte is invalid, first clamp it to NOP (fail-soft: "dead row").
     if (this.isRuleOpcodeByte(idx) && tape.data[idx] > MAX_VALID_ACTION_OPCODE) {
       tape.data[idx] = ActionOpcode.NOP;
     }
-    tape.degradation[idx] = Math.max(0, tape.degradation[idx] - REPAIR_DEG_HEAL);
+
+    // 2) Quorum-gated bypass: if we repaired inside the rule table, sometimes re-route by copying a healthy rule row
+    // into a heavily damaged one. This avoids "all or nothing" restoration while keeping the system driving.
+    const quorum01 = Math.max(0, Math.min(1, kinSum / 4)); // 0..1-ish (same-org 0..4 plus weighted foreign)
+    if (idx >= CONDITIONS_OFFSET && idx < CONDITIONS_OFFSET + MAX_RULES * RULE_SIZE) {
+      if (randomF32() < REPAIR_RULE_BYPASS_BASE_P * quorum01 * inten) {
+        const ruleIdx = Math.floor((idx - CONDITIONS_OFFSET) / RULE_SIZE);
+        let best = -1;
+        let bestScore = -Infinity;
+        for (let r = 0; r < MAX_RULES; r++) {
+          if (r === ruleIdx) continue;
+          const off = CONDITIONS_OFFSET + r * RULE_SIZE;
+          // Prefer low-wear, non-NOP rules as donors.
+          const rawOp = tape.data[off + 2] & 0xff;
+          const opOk = rawOp !== ActionOpcode.NOP && rawOp <= MAX_VALID_ACTION_OPCODE;
+          let wear = 0;
+          for (let b = 0; b < RULE_SIZE; b++) wear += tape.degradation[off + b];
+          const score = (opOk ? 1 : 0) * 1000 - wear;
+          if (score > bestScore) { bestScore = score; best = r; }
+        }
+        if (best >= 0) {
+          const src = CONDITIONS_OFFSET + best * RULE_SIZE;
+          const dst = CONDITIONS_OFFSET + ruleIdx * RULE_SIZE;
+          for (let b = 0; b < RULE_SIZE; b++) {
+            tape.data[dst + b] = tape.data[src + b];
+            // copying doesn't erase wear; it just makes the slot "coherently wired" again
+            tape.degradation[dst + b] = Math.min(255, tape.degradation[dst + b] + 2);
+          }
+        }
+      }
+    }
+
+    // 3) Gradual heal with slight neighborhood reflow.
+    const heal = REPAIR_DEG_HEAL;
+    tape.degradation[idx] = Math.max(0, tape.degradation[idx] - heal);
+    const spread = Math.max(1, Math.round(heal * REPAIR_DEG_HEAL_SPREAD_FRAC));
+    if (idx > 0) tape.degradation[idx - 1] = Math.max(0, tape.degradation[idx - 1] - spread);
+    if (idx + 1 < TAPE_SIZE) tape.degradation[idx + 1] = Math.max(0, tape.degradation[idx + 1] - spread);
     return true;
+  }
+
+  private transferWithLoss(amount: number, lossFrac: number): { received: number; heat: number } {
+    const heat = amount * lossFrac;
+    return { received: amount - heat, heat };
   }
 
   private actionGive(cell: CellCtx, rate: number): boolean {
@@ -947,8 +1109,8 @@ export class RuleEvaluator {
         if (ne < cell.energy - basePush) {
           const c = this.sameOrgTissueCoupling(cell.idx, nIdx);
           const lossFrac = 0.1 + SAME_ORG_TRANSFER_MISMATCH_EXTRA * (1 - c);
-          const loss = basePush * lossFrac;
-          this.setCellEnergyCapped(nx, ny, ne + basePush - loss, nOrg);
+          const { received, heat: loss } = this.transferWithLoss(basePush, lossFrac);
+          this.setCellEnergyCapped(nx, ny, ne + received, nOrg);
           given += basePush;
           heat += loss;
         }
@@ -960,7 +1122,7 @@ export class RuleEvaluator {
         if (pushPerN < 0.12) continue;
         if (ne < cell.energy - pushPerN) {
           const loss = pushPerN * (0.1 + KIN_GIVE_EXTRA_HEAT * (1 - t));
-          this.setCellEnergyCapped(nx, ny, ne + pushPerN - loss, nOrg);
+          this.setCellEnergyCapped(nx, ny, ne + (pushPerN - loss), nOrg);
           given += pushPerN;
           heat += loss;
         }
@@ -988,9 +1150,9 @@ export class RuleEvaluator {
         const nIdx = ny * GRID_WIDTH + nx;
         const c = this.sameOrgTissueCoupling(cell.idx, nIdx);
         const lossFrac = 0.1 + SAME_ORG_TRANSFER_MISMATCH_EXTRA * (1 - c);
-        const loss = pull * lossFrac;
+        const { received, heat: loss } = this.transferWithLoss(pull, lossFrac);
         this.setCellEnergyCapped(nx, ny, ne - pull, cell.orgId);
-        taken += pull - loss;
+        taken += received;
         heat += loss;
       }
     }
@@ -1141,19 +1303,39 @@ export class RuleEvaluator {
     for (const [dx, dy] of this.neighborDirs()) {
       const nx = cell.x + dx, ny = cell.y + dy;
       if (!this.world.isEmpty(nx, ny)) continue;
-      const childTape = transcribeForReproduction(org.tape);
-      if (!childTape) {
-        const e = cell.energy;
-        const pay = Math.min(e, REPRODUCE_ACTION_COST);
-        cell.energy = e - pay;
-        cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
-        this.envEnergy[cell.idx] += pay;
-        org.reproduceCooldown = REPRODUCE_COOLDOWN_TICKS;
-        return false;
+      // Analog “degraded birth”: never hard-abort (stillbirth becomes "born but weak / repair debt").
+      let totalE = 0;
+      for (const idx of org.cells) totalE += this.world.getCellEnergyByIdx(idx);
+      const avgE = org.cells.size > 0 ? totalE / org.cells.size : 0;
+      const outcome = transcribeForReproductionOutcome(org.tape, { avgEnergy: avgE, age: org.age });
+      const childTape = outcome.tape;
+      if (outcome.degraded) {
+        // Degraded birth: child starts with repair debt (wear) concentrated in fragile “life support” areas.
+        const sev = Math.max(0, Math.min(1, outcome.failP));
+        // Replication key always starts somewhat worn if viability would have failed.
+        for (let k = 0; k < REPLICATION_KEY_LEN; k++) {
+          const i = REPLICATION_KEY_OFFSET + k;
+          childTape.degradation[i] = Math.min(255, childTape.degradation[i] + Math.round(64 + 160 * sev));
+        }
+        // Spread some wear into rule opcodes so behavior can limp (NOP-heavy) but still recover via REPAIR.
+        const nRuleHits = Math.round(6 + 28 * sev);
+        for (let t = 0; t < nRuleHits; t++) {
+          const r = Math.floor(randomF32() * MAX_RULES);
+          const opIdx = CONDITIONS_OFFSET + r * RULE_SIZE + 2;
+          childTape.degradation[opIdx] = Math.min(255, childTape.degradation[opIdx] + Math.round(32 + 96 * sev));
+          if (randomF32() < 0.35 * sev) childTape.data[opIdx] = ActionOpcode.NOP;
+        }
+        // NN drift starts "noisier" too (mood wobble) without hard-killing the rule table.
+        const nnHits = Math.round(8 + 36 * sev);
+        for (let t = 0; t < nnHits; t++) {
+          const i = 128 + Math.floor(randomF32() * 128);
+          childTape.degradation[i] = Math.min(255, childTape.degradation[i] + Math.round(12 + 60 * sev));
+        }
       }
       const childId = this.world.nextOrganismId++;
       const budget = cell.energy - REPRODUCE_ACTION_COST;
-      const childE = budget * childFraction;
+      const degradedFactor = outcome.degraded ? Math.max(0.08, 1 - 0.85 * outcome.failP) : 1;
+      const childE = budget * childFraction * degradedFactor;
       this.organisms.register(childId, childTape, { parentId: org.id, birthTick: this.simTick });
       const childCap = this.safeCellEnergyCapForOrg(childId);
       const childStored = Math.min(childE, childCap);
@@ -1183,25 +1365,13 @@ export class RuleEvaluator {
 
       const dA = Math.abs(this.world.getMorphogenA(cell.idx) - this.world.getMorphogenA(nIdx));
       const dB = Math.abs(this.world.getMorphogenB(cell.idx) - this.world.getMorphogenB(nIdx));
-      const morphAffinity = morphAbsorbAffinity(dA, dB); // 0..1
 
-      // Connected-group scaling: bigger connected same-org groups express stronger immunity (JAM) and stronger breaking.
-      // Use a saturating geometric term (1 - 1/sqrt(S)) so the effect rises quickly then plateaus.
+      // Edge scalars: compute in `behaviors/foreign-edge.ts` to keep boundary vocabulary consistent.
       const groupSize = this.sameOrgConnectedGroupSize(cell.idx, cell.orgId);
-      const groupBoost = 1 - 1 / Math.sqrt(Math.max(1, groupSize)); // 0..~1
-
-      // JAM as immunity: dampen all ABSORB coupling. Larger groups make JAM more effective.
-      const jamStrength = Math.max(this.jamTicks[cell.idx], this.jamTicks[nIdx]) / 255; // 0..1
-      const jamEff = Math.min(1, jamStrength * (1 + groupBoost));
-
-      // Immune inhibition (breaking): grows with connected group size too, but costs heat proportional to the breaking.
-      // Use morphB only as a continuous "breaker presence" (0..1) without tunable scale.
+      const groupBoost = computeGroupBoostFromSize(groupSize);
+      const jamStrength = computeJamStrengthOnEdge(this.jamTicks, cell.idx, nIdx);
       const mB = (this.world.getMorphogenB(cell.idx) + this.world.getMorphogenB(nIdx)) * 0.5;
-      const breakerPresence = mB / (1 + Math.abs(mB)); // 0..1 for mB>=0 (fields are non-negative in practice)
-      const breakFrac = Math.min(1, breakerPresence * groupBoost); // 0..1
-
-      const effectiveJamStrength = jamEff * (1 - breakFrac);
-      const I = Math.max(0, Math.min(1, 1 - effectiveJamStrength)); // overall coupling intensity (0..1)
+      const { morphAffinity, jamEff, I } = computeAbsorbEdgeScalars(dA, dB, jamStrength, groupBoost, mB);
 
       if (I <= 1e-6) continue;
 
@@ -1250,6 +1420,7 @@ export class RuleEvaluator {
       }
 
       // Break-jam inflammation heat: only when jam exists; proportional to how much JAM was suppressed.
+      const effectiveJamStrength = 1 - I;
       const jamSuppressed = Math.max(0, jamEff - effectiveJamStrength);
       const flux = steal + moved;
       if (jamSuppressed > 1e-6 && flux > 1e-8) {
@@ -1318,28 +1489,12 @@ export class RuleEvaluator {
 
   /** On-demand same-org connected component size around `seedIdx` (bounded by `cap` for performance). */
   private sameOrgConnectedGroupSize(seedIdx: number, orgId: number, cap = ABSORB_GROUP_SCAN_CAP): number {
-    if (orgId <= 0) return 1;
-    const dirs = this.neighborDirs();
-    const seen = new Set<number>();
-    const q: number[] = [seedIdx];
-    seen.add(seedIdx);
-    while (q.length > 0 && seen.size < cap) {
-      const idx = q.pop()!;
-      const x = idx % GRID_WIDTH;
-      const y = (idx - x) / GRID_WIDTH;
-      for (const [dx, dy] of dirs) {
-        const nx = x + dx, ny = y + dy;
-        if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
-        const ni = ny * GRID_WIDTH + nx;
-        if (seen.has(ni)) continue;
-        if (this.world.getOrganismIdByIdx(ni) !== orgId) continue;
-        if (this.world.getCellTypeByIdx(ni) === CellType.Empty) continue;
-        seen.add(ni);
-        q.push(ni);
-        if (seen.size >= cap) break;
-      }
-    }
-    return seen.size;
+    const key = (orgId << 16) ^ (seedIdx & 0xffff);
+    const hit = this.groupSizeCache.get(key);
+    if (hit !== undefined) return hit;
+    const sz = computeSameOrgConnectedGroupSize(this.world, seedIdx, orgId, this.neighborDirs(), cap);
+    this.groupSizeCache.set(key, sz);
+    return sz;
   }
 
   /** Cross-lineage cooperation allowed on this neighbor edge (GIVE, foreign kin REPAIR quorum, HGT); false when either cell is JAM-tagged. */
@@ -1367,12 +1522,16 @@ export class RuleEvaluator {
     const trust = this.kinTrustForeign(cell.idx, donorIdx, cell.orgId);
     const repairDefense = this.repairQuorumKin(cell);
     const contactPressure = this.foreignContactPressure(cell);
-    const stealFactor = Math.min(1, contactFlux / Math.max(0.01, maxSteal));
     const gut = this.world.getStomachByIdx(cell.idx);
-    const stomachFactor = gut / (gut + XENO_TAPE_TRANSFER_STOMACH_K);
-    const interfaceGain = 0.2 + 0.8 * contactPressure;
-    const drive = Math.max(0, Math.min(1, (0.35 + trust) * stomachFactor * stealFactor * interfaceGain));
-    const defense = repairDefense / (1 + repairDefense);
+    const { drive, defense } = computeHgtDriveDefense(
+      contactFlux,
+      maxSteal,
+      trust,
+      gut,
+      contactPressure,
+      repairDefense,
+      XENO_TAPE_TRANSFER_STOMACH_K,
+    );
     if (drive <= defense) {
       recordXenoTransferAttempt(false, drive);
       return;
@@ -1457,99 +1616,66 @@ export class RuleEvaluator {
   // Stomach → this cell’s energy + heat to env. DIGEST opcode only pre-fills digestRuleBoost (capped); see DIGEST_RULE_BOOST_CAP.
   // Requires tape `isDigestModuleIntact()` (energy-cap bank DIGEST slot); otherwise gut content is inert until REPAIR.
   digestPhase() {
-    for (const org of this.organisms.organisms.values()) {
-      if (!org.tape.isDigestModuleIntact()) continue;
-      for (const idx of org.cells) {
-        const stomach = this.world.getStomachByIdx(idx);
-        if (stomach < 0.01) continue;
-        const cellE = this.world.getCellEnergyByIdx(idx);
-        const enzymeEff = Math.max(0, Math.min(1, cellE / 3));
-        const specBonus = 1 + this.world.getMarkerByIdx(idx, MARKER_DIGEST) / 255;
-        const boostMul = 1 + this.digestRuleBoost[idx]; // already ≤ DIGEST_RULE_BOOST_CAP
-        const sameRatio = this.sameOrgNeighborRatioByIdx(idx, org.id);
-        const networkMul = DIGEST_NETWORK_BASE + DIGEST_NETWORK_COEFF * sameRatio;
-        const digested = stomach * PASSIVE_DIGEST_RATE * enzymeEff * specBonus * boostMul * networkMul;
-        const heat = digested * DIGESTION_HEAT_LOSS;
-        this.world.setStomachByIdx(idx, stomach - digested);
-        this.setCellEnergyCappedByIdx(idx, cellE + digested - heat, org.id);
-        this.envEnergy[idx] += heat;
-      }
-    }
+    runDigestPhase({
+      organisms: this.organisms,
+      world: this.world,
+      envEnergy: this.envEnergy,
+      digestRuleBoost: this.digestRuleBoost,
+      markerDigestSlot: MARKER_DIGEST,
+      sameOrgNeighborRatioByIdx: (idx, orgId) => this.sameOrgNeighborRatioByIdx(idx, orgId),
+      setCellEnergyCappedByIdx: (idx, energy, orgIdHint) => this.setCellEnergyCappedByIdx(idx, energy, orgIdHint),
+      passiveDigestRate: PASSIVE_DIGEST_RATE,
+      digestionHeatLoss: DIGESTION_HEAT_LOSS,
+      digestNetworkBase: DIGEST_NETWORK_BASE,
+      digestNetworkCoeff: DIGEST_NETWORK_COEFF,
+    });
   }
 
   // ==================== METABOLIC COST (density-dependent) ====================
   applyMetabolicCost() {
-    const liveN = this.liveCellCount;
-
-    for (const org of this.organisms.organisms.values()) {
-      const share = org.cells.size / liveN;
-      const dominanceMult = getDominanceMetabolicMultiplier(share, this.suppressionMode === 'on');
-      const perCell = getPerCellMetabolicBase(org.cells.size, dominanceMult, this.metabolicScale);
-      for (const idx of org.cells) {
-        const sameRatio = this.sameOrgNeighborRatioByIdx(idx, org.id);
-        const isolationMult = 1 + ISOLATION_METABOLIC_PENALTY * (1 - sameRatio);
-        const e = this.world.getCellEnergyByIdx(idx);
-        const cost = Math.min(e, perCell * isolationMult);
-        const newE = e - cost;
-        this.setCellEnergyCappedByIdx(idx, newE, org.id);
-        this.envEnergy[idx] += cost;
-        if (newE < 2) {
-          const leak = Math.min(newE, LOW_ENERGY_LEAK_MAX);
-          if (leak > 0) {
-            this.setCellEnergyCappedByIdx(idx, newE - leak, org.id);
-            this.envEnergy[idx] += leak;
-          }
-          if (randomF32() < 0.02) org.tape.applyReadDegradation(0, org.age);
-        }
-      }
-    }
+    applyMetabolicCostPhase({
+      organisms: this.organisms,
+      world: this.world,
+      envEnergy: this.envEnergy,
+      liveCellCount: this.liveCellCount,
+      suppressionMode: this.suppressionMode,
+      metabolicScale: this.metabolicScale,
+      sameOrgNeighborRatioByIdx: (idx, orgId) => this.sameOrgNeighborRatioByIdx(idx, orgId),
+      setCellEnergyCappedByIdx: (idx, energy, orgIdHint) => this.setCellEnergyCappedByIdx(idx, energy, orgIdHint),
+      randomF32,
+      getDominanceMetabolicMultiplier,
+      getPerCellMetabolicBase,
+      isolationMetabolicPenalty: ISOLATION_METABOLIC_PENALTY,
+      lowEnergyLeakMax: LOW_ENERGY_LEAK_MAX,
+    });
   }
 
   /** Per-lineage overhead: same absolute cost for tiny vs large org → multicell amortizes; culls org spam. */
   applyOrganismOverhead() {
-    for (const org of this.organisms.organisms.values()) {
-      if (org.cells.size === 0) continue;
-      const indices = [...org.cells];
-      let totalE = 0;
-      for (const idx of indices) totalE += this.world.getCellEnergyByIdx(idx);
-      if (totalE < 1e-8) continue;
-      const takeTotal = Math.min(totalE, ORG_OVERHEAD_PER_TICK);
-      for (const idx of indices) {
-        const e = this.world.getCellEnergyByIdx(idx);
-        const t = takeTotal * (e / totalE);
-        this.setCellEnergyCappedByIdx(idx, e - t, org.id);
-        this.envEnergy[idx] += t;
-      }
-    }
+    applyOrganismOverheadPhase({
+      organisms: this.organisms,
+      world: this.world,
+      envEnergy: this.envEnergy,
+      setCellEnergyCappedByIdx: (idx, energy, orgIdHint) => this.setCellEnergyCappedByIdx(idx, energy, orgIdHint),
+      overheadPerTick: ORG_OVERHEAD_PER_TICK,
+    });
   }
 
   // ==================== CLEANUP ====================
   cleanupDeadOrganisms() {
-    const nOrgs = this.organisms.count;
-    const crowdDiss = getCrowdingDissolveBonus(nOrgs, this.suppressionMode === 'on');
-    const baseDiss = DISSOLVE_BASE + crowdDiss;
-
-    const dead: number[] = [];
-    for (const org of this.organisms.organisms.values()) {
-      const toDissolve: number[] = [];
-      let p = org.cells.size === 1 ? baseDiss * DISSOLVE_SINGLE_MULT : baseDiss;
-      p = Math.min(0.22, p);
-      for (const idx of org.cells) {
-        if (this.world.getOrganismIdByIdx(idx) !== org.id) { toDissolve.push(idx); continue; }
-        if (this.world.getCellEnergyByIdx(idx) <= 0 && randomF32() < p) toDissolve.push(idx);
-      }
-      for (const idx of toDissolve) {
-        const e = this.world.getCellEnergyByIdx(idx);
-        const s = this.world.getStomachByIdx(idx);
-        if (e > 0) this.envEnergy[idx] += e;
-        if (s > 0) this.envEnergy[idx] += s;
-        const base = idx * U32_PER_CELL;
-        for (let i = 0; i < U32_PER_CELL; i++) this.world.cellData[base + i] = 0;
-        org.cells.delete(idx);
-      }
-      if (org.cells.size === 0) dead.push(org.id);
-    }
-    for (const id of dead) this.organisms.remove(id);
+    cleanupDeadOrganismsPhase(
+      {
+        organisms: this.organisms,
+        world: this.world,
+        envEnergy: this.envEnergy,
+        suppressionMode: this.suppressionMode,
+        randomF32,
+        getCrowdingDissolveBonus,
+        dissolveBase: DISSOLVE_BASE,
+        dissolveSingleMult: DISSOLVE_SINGLE_MULT,
+      },
+      U32_PER_CELL,
+    );
   }
 
   // ==================== CONNECTIVITY CHECK ====================

@@ -29,7 +29,7 @@ export interface ActionDispatchDeps {
   writeFeedback: (org: Organism, slot: number, value: number) => void;
   bumpMarker: (idx: number, marker: MarkerSlot, amount: number) => void;
   collectNeighborEnvSum: (cell: DispatchCell) => number;
-  actionEat: (cell: DispatchCell, strength: number, orgCellCount: number) => void;
+  actionEat: (cell: DispatchCell, strength: number, orgCellCount: number) => boolean;
   actionGive: (cell: DispatchCell, intensity01: number) => boolean;
   actionTake: (cell: DispatchCell, intensity: number) => boolean;
   actionDivide: (cell: DispatchCell, org: Organism, tape: Tape, minEnergy: number) => boolean;
@@ -56,7 +56,8 @@ export function dispatchAction(
   switch (rule.actionOpcode) {
     case ActionOpcode.EAT: {
       const strength = (mod / 255) * 5;
-      deps.actionEat(cell, strength, org.cells.size);
+      const ok = deps.actionEat(cell, strength, org.cells.size);
+      if (!ok) return false;
       deps.bumpMarker(cell.idx, deps.markers.eat, deps.markers.bump);
       deps.writeFeedback(org, 0, strength * 51);
       return true;

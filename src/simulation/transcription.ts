@@ -60,6 +60,31 @@ const REPL_ABORT_DEG = 0.2;
 const REPL_ABORT_CROSS = 0.38;
 const REPL_ABORT_CAP = 0.6;
 
+export interface TranscriptionContext {
+  /** Approx mean cell energy of the parent organism (0..~cap). Used to stabilize copying when healthy. */
+  avgEnergy?: number;
+  /** Parent organism age in ticks. Older parents copy a bit less reliably. */
+  age?: number;
+}
+
+function clamp01(x: number): number {
+  return Math.max(0, Math.min(1, x));
+}
+
+function computeCopyInstability(ctx?: TranscriptionContext): number {
+  const avgE = Math.max(0, ctx?.avgEnergy ?? 50);
+  const age = Math.max(0, ctx?.age ?? 0);
+  const starving = 1 - clamp01(avgE / 50);     // 0 healthy → 1 starving
+  const old = clamp01(age / 5000);             // 0 young → 1 very old
+  // Instability is a continuous knob: healthy+young => stable; starving/old => noisier.
+  return clamp01(0.15 + 0.75 * starving + 0.35 * old);
+}
+
+function rateScaleFromInstability(instability: number): number {
+  // stable parents: downscale to ~0.35×; unstable: up to ~1.45×
+  return 0.35 + 1.1 * clamp01(instability);
+}
+
 /** Full genomic copy for non-reproduction uses (e.g. future clone paths). */
 export function transcribe(parent: Tape): Tape {
   const data = transcribeCore(parent);
@@ -71,16 +96,29 @@ export function transcribe(parent: Tape): Tape {
  * Returns null = mitosis failed after spending attempt cost in caller.
  */
 export function transcribeForReproduction(parent: Tape): Tape | null {
-  const data = transcribeCore(parent);
-  if (replicationAborted(parent, data)) return null;
-  return new Tape(data);
+  const out = transcribeForReproductionOutcome(parent);
+  // Backward-compatible API: degraded birth still counts as "a birth" in the new design,
+  // but callers that expect null will treat it as failure; we keep this for old call sites.
+  // New callers should use `transcribeForReproductionOutcome`.
+  return out.degraded ? null : out.tape;
 }
 
-function transcribeCore(parent: Tape): Uint8Array {
+export function transcribeForReproductionOutcome(
+  parent: Tape,
+  ctx?: TranscriptionContext,
+): { tape: Tape; degraded: boolean; failP: number; mismatchBits: number; degMean: number } {
+  const data = transcribeCore(parent, ctx);
+  const { aborted, failP, mismatchBits, degMean } = replicationAborted(parent, data);
+  return { tape: new Tape(data), degraded: aborted, failP, mismatchBits, degMean };
+}
+
+function transcribeCore(parent: Tape, ctx?: TranscriptionContext): Uint8Array {
   const deg = parent.degradation;
-  let data = writePhase(parent.data, deg);
-  data = channelPhase(data, deg);
-  data = readPhase(data, deg);
+  const instability = computeCopyInstability(ctx);
+  const scale = rateScaleFromInstability(instability);
+  let data = writePhase(parent.data, deg, scale);
+  data = channelPhase(data, deg, scale);
+  data = readPhase(data, deg, scale);
 
   if (data.length !== TAPE_SIZE) {
     if (data.length > TAPE_SIZE) data = data.slice(0, TAPE_SIZE);
@@ -91,7 +129,7 @@ function transcribeCore(parent: Tape): Uint8Array {
     }
   }
 
-  structuralMutations(data);
+  structuralMutations(data, scale);
   applyLineageDrift(data);
   return data;
 }
@@ -126,7 +164,10 @@ function popcountByte(b: number): number {
   return n;
 }
 
-function replicationAborted(parent: Tape, childData: Uint8Array): boolean {
+function replicationAborted(
+  parent: Tape,
+  childData: Uint8Array,
+): { aborted: boolean; failP: number; mismatchBits: number; degMean: number } {
   let mismatchBits = 0;
   let degSum = 0;
   for (let k = 0; k < REPLICATION_KEY_LEN; k++) {
@@ -145,13 +186,20 @@ function replicationAborted(parent: Tape, childData: Uint8Array): boolean {
   );
   const aborted = randomF32() < failP;
   if (aborted) recordStillbirth();
-  return aborted;
+  return { aborted, failP, mismatchBits, degMean };
 }
 
-function structuralMutations(data: Uint8Array) {
+function structuralMutations(data: Uint8Array, scale: number) {
+  // Structure-level mutations are the main source of "big jumps".
+  // We keep them, but scale with instability so healthy parents tend to copy more continuously.
+  const s = Math.max(0, Math.min(2.0, scale));
+  const ruleDupRate = RULE_DUP_RATE * s;
+  const ruleSwapRate = RULE_SWAP_RATE * s;
+  const dataDupRate = DATA_DUP_RATE * s;
+
   // Rule duplication: copy one rule's bytes to another slot
   for (let r = 0; r < MAX_RULES; r++) {
-    if (randomF32() < RULE_DUP_RATE) {
+    if (randomF32() < ruleDupRate) {
       const target = randomInt(MAX_RULES);
       if (target === r) continue;
       const srcOff = CONDITIONS_OFFSET + r * RULE_SIZE;
@@ -164,7 +212,7 @@ function structuralMutations(data: Uint8Array) {
   }
 
   // Rule swap: exchange two rules entirely
-  if (randomF32() < RULE_SWAP_RATE) {
+  if (randomF32() < ruleSwapRate) {
     const a = randomInt(MAX_RULES);
     const b = randomInt(MAX_RULES);
     if (a !== b) {
@@ -182,7 +230,7 @@ function structuralMutations(data: Uint8Array) {
   // Data region byte duplication: copy one data byte to another data slot.
   // Protect only byte 4 (maxCells). Bytes 5-6 are active operation nodes and must remain evolvable.
   for (let i = 0; i < 32; i++) {
-    if (randomF32() < DATA_DUP_RATE) {
+    if (randomF32() < dataDupRate) {
       const target = randomInt(32);
       if (isProtectedDataDupTarget(target)) continue;
       data[target] = data[i];
@@ -224,11 +272,11 @@ function channelSwapAcceptanceMultiplier(a: number, b: number): number {
   return m;
 }
 
-function writePhase(source: Uint8Array, degradation: Uint8Array): Uint8Array {
+function writePhase(source: Uint8Array, degradation: Uint8Array, scale: number): Uint8Array {
   const copy = new Uint8Array(source.length);
   for (let i = 0; i < source.length; i++) {
     copy[i] = source[i];
-    const rate = WRITE_ERROR_RATE * keyWearBoost(degradation, i);
+    const rate = WRITE_ERROR_RATE * scale * keyWearBoost(degradation, i);
     if (randomF32() < rate) {
       copy[i] = randomInt(256);
       recordWriteRandomization();
@@ -237,11 +285,11 @@ function writePhase(source: Uint8Array, degradation: Uint8Array): Uint8Array {
   return copy;
 }
 
-function channelPhase(data: Uint8Array, degradation: Uint8Array): Uint8Array {
+function channelPhase(data: Uint8Array, degradation: Uint8Array, scale: number): Uint8Array {
   const out = new Uint8Array(data);
   const n = TAPE_SIZE;
   for (let i = 0; i < n; i++) {
-    let rate = CHANNEL_BITFLIP_RATE;
+    let rate = CHANNEL_BITFLIP_RATE * scale;
     if (i >= REPLICATION_KEY_OFFSET && i < REPLICATION_KEY_OFFSET + REPLICATION_KEY_LEN) {
       rate *= 1 + (degradation[i] / 255) * KEY_WEAR_CHANNEL_MULT;
     }
@@ -250,7 +298,8 @@ function channelPhase(data: Uint8Array, degradation: Uint8Array): Uint8Array {
       recordChannelBitflip();
     }
   }
-  if (randomF32() < CHANNEL_SWAP_BASE_PROB) {
+  // Structural swap becomes more likely when copying is already unstable.
+  if (randomF32() < CHANNEL_SWAP_BASE_PROB * scale) {
     let a = randomInt(n);
     let b = randomInt(n);
     if (a === b) b = (b + 1 + randomInt(n - 1)) % n;
@@ -267,10 +316,10 @@ function channelPhase(data: Uint8Array, degradation: Uint8Array): Uint8Array {
   return out;
 }
 
-function readPhase(data: Uint8Array, degradation: Uint8Array): Uint8Array {
+function readPhase(data: Uint8Array, degradation: Uint8Array, scale: number): Uint8Array {
   const result = new Uint8Array(data.length);
   for (let i = 0; i < data.length; i++) {
-    let fetchErr = READ_FETCH_ERROR;
+    let fetchErr = READ_FETCH_ERROR * scale;
     if (i >= REPLICATION_KEY_OFFSET && i < REPLICATION_KEY_OFFSET + REPLICATION_KEY_LEN) {
       fetchErr *= 1 + (degradation[i] / 255) * KEY_WEAR_READ_MULT;
     }

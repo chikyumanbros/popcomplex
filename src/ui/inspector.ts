@@ -4,6 +4,7 @@ import { U32_PER_CELL } from '../simulation/world';
 import type { UIState } from './controls';
 import { GRID_WIDTH, GRID_HEIGHT } from '../simulation/constants';
 import { formatTapeRulesInspectorHtml } from '../simulation/tape';
+import { tapeDegradationPercent, wearLevelFromDegradation } from '../simulation/tape-health';
 
 export function setupInspector(
   canvas: HTMLCanvasElement,
@@ -49,9 +50,7 @@ export function setupInspector(
     const kinFaceTape = org.tape.getPublicKinTagPacked() & 0xffffff;
     const kinGeneticTape = org.tape.getGeneticKinTagPacked() & 0xffffff;
     const lineageCell = world.cellData[idx * U32_PER_CELL + 7] & 0xffffff;
-    const degradation = org.tape.degradation.reduce((a: number, b: number) => a + b, 0);
-    const maxDeg = org.tape.degradation.length * 255;
-    const degPercent = ((degradation / maxDeg) * 100).toFixed(1).padStart(5, '\u2007');
+    const degPercent = tapeDegradationPercent(org.tape.degradation).toFixed(1).padStart(5, '\u2007');
 
     const nnOut = org.nnOutput;
     const moodLabels = ['eat', 'grow', 'move', 'save'];
@@ -59,11 +58,12 @@ export function setupInspector(
       .map((m, i) => `${m}:${nnOut[i].toFixed(2).padStart(5, '\u2007')}`)
       .join(' ');
 
+    const [rr0, rr1, rr2] = world.getRuleRoutesByIdx(idx);
+    const routesStr = `routes ${String(rr0).padStart(2, '\u2007')},${String(rr1).padStart(2, '\u2007')},${String(rr2).padStart(2, '\u2007')}`;
+
     let tapeHtml = '<div class="tape-view">';
     const bpl = 16;
-    // Color thresholds: keep early “normal wear” uncolored; highlight only when wear likely matters for survival.
-    const WEAR_WARN = 32;
-    const WEAR_DANGER = 96;
+    // Color thresholds are centralized in `tape-health.ts`.
     const regionLabels: Record<number, string> = { 0: '── data ──', 32: '── CA ──', 64: '── rules ──', 128: '── NN wt ──' };
     for (let off = 0; off < org.tape.data.length; off += bpl) {
       if (regionLabels[off]) tapeHtml += `<div style="color:#555">${regionLabels[off]}</div>`;
@@ -72,7 +72,8 @@ export function setupInspector(
         const i = off + b;
         const h = org.tape.data[i].toString(16).padStart(2, '0');
         const d = org.tape.degradation[i];
-        hex.push(d > WEAR_DANGER ? `<span class="corrupt-high">${h}</span>` : d > WEAR_WARN ? `<span class="corrupt-low">${h}</span>` : h);
+        const lvl = wearLevelFromDegradation(d);
+        hex.push(lvl === 'danger' ? `<span class="corrupt-high">${h}</span>` : lvl === 'warn' ? `<span class="corrupt-low">${h}</span>` : h);
       }
       tapeHtml += `<div>${off.toString(16).padStart(3, '0')}: ${hex.join(' ')}</div>`;
     }
@@ -99,6 +100,7 @@ export function setupInspector(
         Markers  eat${mEatS}  dig${mDigestS}  sig${mSignalS}  move${mMoveS}
       </div>
       <div class="nn-bias">NN  ${nnStr}</div>
+      <div class="nn-bias">${routesStr}</div>
       ${formatTapeRulesInspectorHtml(org.tape)}
       ${tapeHtml}
     `;

@@ -49,7 +49,7 @@ export function allowsForeignKinGive(kinTrust: number, minTrust: number): boolea
 
 /**
  * Cross-lineage cooperative coupling (foreign kin GIVE, repair quorum weight, HGT): off when JAM is active on the edge.
- * Predation steal (ABSORB) intentionally ignores this — see `foreignAbsorbInteraction`.
+ * NOTE: ABSORB is handled as a **single continuous interaction** in `RuleEvaluator.actionAbsorb` and is not gated here.
  */
 export function foreignKinCooperationEdgeOpen(edgeJammed: boolean): boolean {
   return !edgeJammed;

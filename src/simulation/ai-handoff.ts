@@ -5,14 +5,9 @@
 
 import { GRID_WIDTH, GRID_HEIGHT, TOTAL_CELLS } from './constants';
 import {
-  ActionOpcode,
-  CONDITIONS_OFFSET,
-  MAX_VALID_ACTION_OPCODE,
   NN_TAPE_WEIGHT_CENTER,
   NN_TAPE_WEIGHT_SCALE,
   PROTO_TAPE_NN_SEED,
-  RULE_SIZE,
-  MAX_RULES,
   TAPE_SNAPSHOT_BYTES,
   tapeSnapshotBase64,
 } from './tape';
@@ -28,6 +23,7 @@ import type { RuleEvaluator } from './rule-evaluator';
 import type { UIState } from '../ui/controls';
 import { measureEnergyBookkeeping, biomassReservoirTotal, type EnergyBookkeeping } from './energy-metrics';
 import { getRandomSeed } from './rng';
+import { countInvalidRuleOpcodes } from './tape-health';
 
 function tapeHexDump(data: Uint8Array): string {
   const labels: Record<number, string> = {
@@ -58,19 +54,6 @@ function tapeDegradationHexDump(deg: Uint8Array): string {
     lines.push(`${off.toString(16).padStart(3, '0')}: ${parts.join(' ')}`);
   }
   return lines.join('\n');
-}
-
-function countInvalidRuleOpcodes(data: Uint8Array): { invalid: number; nop: number; valid: number } {
-  let invalid = 0;
-  let nop = 0;
-  let valid = 0;
-  for (let r = 0; r < MAX_RULES; r++) {
-    const op = data[CONDITIONS_OFFSET + r * RULE_SIZE + 2];
-    if (op === ActionOpcode.NOP) nop++;
-    else if (op > MAX_VALID_ACTION_OPCODE) invalid++;
-    else valid++;
-  }
-  return { invalid, nop, valid };
 }
 
 type MoodIdx = 0 | 1 | 2 | 3;
