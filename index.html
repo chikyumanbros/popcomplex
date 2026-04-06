@@ -273,6 +273,25 @@
       border-radius: 4px;
       border: 1px solid var(--border);
     }
+    .ecology-chart-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      margin-top: 6px;
+      font-size: 10px;
+      color: var(--muted, #6b7a8c);
+      align-items: center;
+    }
+    .ecology-chart-toggles label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .ecology-chart-toggles input {
+      accent-color: #5eb8c4;
+    }
   </style>
 </head>
 <body>
@@ -292,7 +311,8 @@
     <div id="sidebar">
       <div id="controls"></div>
       <div id="ecology-chart-wrap" class="ecology-chart-panel">
-        <canvas id="ecology-chart" aria-label="Organism count and Simpson diversity over time"></canvas>
+        <canvas id="ecology-chart" aria-label="Ecology time series: organism count, lineages, and structure metrics"></canvas>
+        <div id="ecology-chart-toggles" class="ecology-chart-toggles" aria-label="Toggle chart series"></div>
       </div>
       <div id="inspector">Shift+click a cell to inspect</div>
     </div>

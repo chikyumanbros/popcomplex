@@ -398,7 +398,7 @@ function logWorldState(
     `[Energy] tick:${opts.tick} orgs:${organisms.count} gridOcc:${bk.occupiedCells} orgCellsΣ:${orgListCells} | env:${(bk.envU / 1e6).toFixed(4)}M cell:${bk.cellEnergy.toFixed(0)} stomach:${bk.stomach.toFixed(0)} measured:${(measured / 1e6).toFixed(4)}M budget:${(opts.closedBudget / 1e6).toFixed(4)}M drift:${opts.drift.toFixed(3)}${deltaStr}`,
   );
   console.log(
-    `[Diversity] lineages:${opts.popMetrics.uniqueLineages} topShare:${(opts.popMetrics.topLineageShare * 100).toFixed(2)}% simpson:${opts.popMetrics.simpsonDiversity.toFixed(4)}`,
+    `[Diversity] lineages:${opts.popMetrics.uniqueLineages} topShare:${(opts.popMetrics.topLineageShare * 100).toFixed(2)}% simpson:${opts.popMetrics.simpsonDiversity.toFixed(4)} shannon:${opts.popMetrics.shannonLineageNats.toFixed(3)} pielou:${opts.popMetrics.pielouEvenness.toFixed(3)} giniLin:${opts.popMetrics.giniLineageSizes.toFixed(3)} meanCells/Org:${opts.popMetrics.meanCellsPerOrganism.toFixed(2)}`,
   );
   console.log(
     `[Morphology] perimeterRatio:${opts.popMetrics.perimeterRatio.toFixed(4)} avgComponents:${opts.popMetrics.avgComponents.toFixed(3)}`,

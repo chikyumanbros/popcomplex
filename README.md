@@ -59,6 +59,7 @@ When tuning ecology parameters, decide adoption by the same protocol every time:
    - Use `runs/*/metrics.csv` columns:
      - `birthRepro`, `birthSplit`, `splitEvents`
      - `occupied`, `orgs`, `simpson`, `lineages`
+     - (optional ecology) `shannonNats`, `pielouEven`, `giniLineage`, `meanCellsPerOrg`
    - Prefer changes that reduce split dominance (`birthSplit / max(1,birthRepro)`) while preserving long-horizon survival (`occupied > 0` at target tick).
 
 Example medium-horizon A/B command (single seed):

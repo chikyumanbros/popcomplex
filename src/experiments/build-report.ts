@@ -42,15 +42,20 @@ function mean(values: number[]): number {
 function parseLastRow(csvText: string): Row | null {
   const lines = csvText.trim().split('\n');
   if (lines.length < 2) return null;
+  const header = lines[0].split(',');
   const last = lines[lines.length - 1].split(',');
-  if (last.length < 17) return null;
-  return {
-    orgs: Number(last[1]),
-    occupied: Number(last[2]),
-    simpson: Number(last[5]),
-    drift: Number(last[10]),
-    noveltyProxy: Number(last[16]),
+  if (last.length !== header.length) return null;
+  const col = (name: string) => {
+    const i = header.indexOf(name);
+    return i >= 0 ? Number(last[i]) : NaN;
   };
+  const orgs = col('orgs');
+  const occupied = col('occupied');
+  const simpson = col('simpson');
+  const drift = col('drift');
+  const noveltyProxy = col('noveltyProxy');
+  if (![orgs, occupied, simpson, drift, noveltyProxy].every((x) => Number.isFinite(x))) return null;
+  return { orgs, occupied, simpson, drift, noveltyProxy };
 }
 
 function main() {

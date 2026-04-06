@@ -122,7 +122,7 @@ function main() {
   }
 
   const rows: string[] = [
-    'tick,orgs,occupied,lineages,topShare,simpson,perimeterRatio,avgComponents,budget,measured,drift,tapeCorr,stillbirths,repTry,repOk,birthRepro,birthSplit,splitEvents,splitFrags,splitFragMean,splitSingletonRatio,splitKeepMean,xenoTry,xenoOk,xenoDriveMean,socialCohMean,actionEntropy,noveltyProxy',
+    'tick,orgs,occupied,lineages,topShare,simpson,shannonNats,pielouEven,giniLineage,meanCellsPerOrg,perimeterRatio,avgComponents,budget,measured,drift,tapeCorr,stillbirths,repTry,repOk,birthRepro,birthSplit,splitEvents,splitFrags,splitFragMean,splitSingletonRatio,splitKeepMean,xenoTry,xenoOk,xenoDriveMean,socialCohMean,actionEntropy,noveltyProxy',
   ];
 
   for (let tick = 1; tick <= args.ticks; tick++) {
@@ -201,6 +201,10 @@ function main() {
           pop.uniqueLineages,
           pop.topLineageShare.toFixed(6),
           pop.simpsonDiversity.toFixed(6),
+          pop.shannonLineageNats.toFixed(6),
+          pop.pielouEvenness.toFixed(6),
+          pop.giniLineageSizes.toFixed(6),
+          pop.meanCellsPerOrganism.toFixed(6),
           pop.perimeterRatio.toFixed(6),
           pop.avgComponents.toFixed(6),
           ruleEval.ecosystemEnergyBudget.toFixed(6),
