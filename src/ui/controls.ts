@@ -5,7 +5,7 @@ import {
 } from '../simulation/runtime-config';
 
 /** Fragment shader visualization mode (`render.wgsl`); cycle with V. */
-export const VIEW_MODE_COUNT = 6;
+export const VIEW_MODE_COUNT = 7;
 export const VIEW_MODE_NAMES = [
   'Default',
   'Env heat',
@@ -13,6 +13,7 @@ export const VIEW_MODE_NAMES = [
   'Stomach',
   'Markers',
   'Energy',
+  'Rot',
 ] as const;
 
 export interface UIState {

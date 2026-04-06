@@ -326,6 +326,7 @@ async function main() {
     // GPU: display only — full sim (rules, metabolism, neural propagation) runs on CPU first.
     world.uploadTo(gpu!.device, buffers.cellState[0]);
     gpu!.device.queue.writeBuffer(buffers.envEnergy[0], 0, ruleEval.envEnergy.buffer);
+    gpu!.device.queue.writeBuffer(buffers.rot, 0, world.rot.buffer);
     // Component highlight toggle: on->upload current, off->zero once.
     if (ui.componentHighlight !== lastComponentHighlight) {
       lastComponentHighlight = ui.componentHighlight;

@@ -62,6 +62,9 @@ export function setupInspector(
 
     const [rr0, rr1, rr2] = world.getRuleRoutesByIdx(idx);
     const routesStr = `routes ${String(rr0).padStart(2, '\u2007')},${String(rr1).padStart(2, '\u2007')},${String(rr2).padStart(2, '\u2007')}`;
+    const rot = world.rot[idx] ?? 0;
+    const rotStr = `rot ${(rot * 100).toFixed(1).padStart(5, '\u2007')}%`;
+    const deadStr = world.getCellEnergyByIdx(idx) <= 0 ? 'dead' : 'live';
 
     let tapeHtml = '<div class="tape-view">';
     const bpl = 16;
@@ -103,6 +106,7 @@ export function setupInspector(
       </div>
       <div class="nn-bias">NN  ${nnStr}</div>
       <div class="nn-bias">${routesStr}</div>
+      <div class="nn-bias">${rotStr} · ${deadStr}</div>
       ${formatTapeRulesInspectorHtml(org.tape)}
       ${tapeHtml}
     `;

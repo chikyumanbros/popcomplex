@@ -25,7 +25,7 @@ interface CliArgs {
   outDir: string;
 }
 
-const DEFAULT_SEED = 3467112274;
+const DEFAULT_SEED = 303039276;
 
 function parseArgs(): CliArgs {
   const map = new Map<string, string>();

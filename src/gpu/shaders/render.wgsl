@@ -18,6 +18,7 @@ struct VertexOutput {
 @group(0) @binding(1) var<storage, read> cellState: array<u32>;
 @group(0) @binding(2) var<storage, read> envEnergy: array<f32>;
 @group(0) @binding(3) var<storage, read> componentMask: array<u32>;
+@group(0) @binding(4) var<storage, read> rot: array<f32>;
 
 fn getCellType(index: u32) -> u32 {
   return cellState[index * 8u + 1u] & 0xFFu;
@@ -53,6 +54,10 @@ fn getMarkerRgb(index: u32) -> vec3f {
   let g = f32((v >> 8u) & 0xFFu);
   let b = f32((v >> 16u) & 0xFFu);
   return vec3f(r, g, b) / 255.0;
+}
+
+fn getRot(index: u32) -> f32 {
+  return clamp(rot[index], 0.0, 1.0);
 }
 
 // Organism hues: slightly richer saturation than env for readable clades
@@ -216,7 +221,7 @@ fn frag(@location(0) uv: vec2f) -> @location(0) vec4f {
     } else {
       color = envColorFromNorm(envNorm, insetEnv) * 0.42;
     }
-  } else {
+  } else if (u.viewMode == 5u) {
     // Mode 5: energy grayscale + light lineage tint
     if (occupied) {
       let g = clamp(cellEnergy / 48.0, 0.1, 1.0);
@@ -226,6 +231,24 @@ fn frag(@location(0) uv: vec2f) -> @location(0) vec4f {
     } else {
       color = envColorFromNorm(envNorm, insetEnv) * 0.44;
     }
+  } else if (u.viewMode == 6u) {
+    // Mode 6: deterministic decay gauge (rot) + dead-gut leak hint.
+    // rot is stored on CPU (World.rot) and uploaded each frame.
+    let r = getRot(index);
+    let dead = select(0.0, 1.0, occupied && cellEnergy <= 1e-6);
+    // Base background: dim env
+    color = envColorFromNorm(envNorm, insetEnv) * 0.25;
+    // Rot: purple->red as it approaches dissolve.
+    let rotC = mix(vec3f(0.12, 0.12, 0.20), vec3f(0.95, 0.22, 0.18), smoothstep(0.0, 1.0, r));
+    // Leak hint: when dead tissue still has stomach, show yellow-green spark
+    let gut = clamp(getStomach(index) / 10.0, 0.0, 1.0) * dead;
+    let leakC = vec3f(0.92, 0.86, 0.18) * gut;
+    // Mix: living cells faintly visible, dead cells show rot strongly
+    let a = dead * (0.25 + 0.75 * r);
+    color = mix(color, rotC * insetCell, a);
+    color = min(vec3f(1.0), color + leakC * (0.25 + 0.6 * (1.0 - r)));
+  } else {
+    color = envColorFromNorm(envNorm, insetEnv) * 0.4;
   }
 
   color = min(color * 1.04, vec3f(1.0));

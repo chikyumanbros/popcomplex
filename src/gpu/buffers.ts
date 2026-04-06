@@ -4,6 +4,7 @@ export interface SimBuffers {
   cellState: [GPUBuffer, GPUBuffer];
   envEnergy: [GPUBuffer, GPUBuffer];
   componentMask: GPUBuffer;
+  rot: GPUBuffer;
   uniform: GPUBuffer;
   staging: GPUBuffer;
   initialEnv: Float32Array;
@@ -13,6 +14,7 @@ export function createBuffers(device: GPUDevice): SimBuffers {
   const cellStateSize = TOTAL_CELLS * 32; // 32 bytes per cell
   const envEnergySize = TOTAL_CELLS * 4;  // f32 per cell
   const componentMaskSize = TOTAL_CELLS * 4; // u32 per cell (0/1)
+  const rotSize = TOTAL_CELLS * 4; // f32 per cell (0..1)
 
   const cellState: [GPUBuffer, GPUBuffer] = [
     device.createBuffer({
@@ -48,6 +50,13 @@ export function createBuffers(device: GPUDevice): SimBuffers {
   // Ensure deterministic start (uninitialized storage buffers are undefined).
   device.queue.writeBuffer(componentMask, 0, new Uint32Array(TOTAL_CELLS).buffer);
 
+  const rot = device.createBuffer({
+    label: 'rot',
+    size: rotSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(rot, 0, new Float32Array(TOTAL_CELLS).buffer);
+
   const uniform = device.createBuffer({
     label: 'uniform',
     size: 32, // 8 fields * 4 bytes
@@ -63,7 +72,7 @@ export function createBuffers(device: GPUDevice): SimBuffers {
   const initialEnv = createInitialEnvEnergy();
   device.queue.writeBuffer(envEnergy[0], 0, initialEnv.buffer);
 
-  return { cellState, envEnergy, componentMask, uniform, staging, initialEnv };
+  return { cellState, envEnergy, componentMask, rot, uniform, staging, initialEnv };
 }
 
 export function createInitialEnvEnergy(): Float32Array {

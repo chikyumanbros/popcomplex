@@ -547,6 +547,7 @@ export class RuleEvaluator {
         const cell = this.cellAt(idx, org.id);
         if (!cell) continue;
         this.passiveAbsorb(cell, org.cells.size);
+        this.deadTissueGutLeakRecover(cell, org.id);
         this.applyForeignInterfaceMetabolism(idx, org.id);
         this.applySocialConsensusDrift(cell, org.id);
         this.world.decayMarkers(idx);
@@ -676,6 +677,7 @@ export class RuleEvaluator {
         const proxyTriesBase = Math.max(0, Math.min(3, 1 + Math.floor(Math.log2(Math.max(1, groupSize)) / 2)));
         const proxyTries = Math.floor(proxyTriesBase * energyGate);
         if (proxyTries > 0) {
+          this.ensureRuleRoutesForCell(cell.idx, org, ruleCount);
           const [r0, r1, r2] = this.world.getRuleRoutesByIdx(cell.idx);
           const routes = [r0 % ruleCount, r1 % ruleCount, r2 % ruleCount];
           for (let i = 0; i < Math.min(proxyTries, routes.length); i++) {
@@ -872,6 +874,56 @@ export class RuleEvaluator {
     this.stomachInflow(cell.idx, take);
   }
 
+  private deadTissueGutLeakRecover(cell: CellCtx, orgId: number) {
+    if (cell.energy > 0) return;
+    const s0 = this.world.getStomachByIdx(cell.idx);
+    if (s0 <= 1e-6) return;
+
+    // Leak some gut content each tick; living same-org neighbors preferentially recover it into stomach.
+    const STOMACH_LEAK_FRAC = 0.10;
+    const leak = Math.min(s0, s0 * STOMACH_LEAK_FRAC);
+    if (leak <= 1e-8) return;
+    this.world.setStomachByIdx(cell.idx, s0 - leak);
+
+    type Sink = { idx: number; w: number };
+    const sinks: Sink[] = [];
+    let wSum = 0;
+
+    // Always allow environment to receive some share (decay to soup).
+    const ENV_BASE_W = 0.35;
+    sinks.push({ idx: cell.idx, w: ENV_BASE_W });
+    wSum += ENV_BASE_W;
+
+    for (const [dx, dy] of this.neighborDirs()) {
+      const nx = cell.x + dx;
+      const ny = cell.y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+      const ni = ny * GRID_WIDTH + nx;
+      if (this.world.getOrganismIdByIdx(ni) !== orgId) continue;
+      const ne = this.world.getCellEnergyByIdx(ni);
+      if (ne <= 0) continue; // dead tissue doesn't recover
+      // Network self-maintenance: living neighbors act as sinks; higher energy pulls more.
+      const w = 0.8 + Math.min(1.2, ne / 8);
+      sinks.push({ idx: ni, w });
+      wSum += w;
+    }
+
+    if (wSum <= 1e-8) {
+      this.envEnergy[cell.idx] += leak;
+      return;
+    }
+
+    for (const s of sinks) {
+      const amt = leak * (s.w / wSum);
+      if (amt <= 1e-9) continue;
+      if (s.idx === cell.idx) {
+        this.envEnergy[cell.idx] += amt;
+      } else {
+        this.stomachInflow(s.idx, amt);
+      }
+    }
+  }
+
   private actionEat(cell: CellCtx, maxGather: number, orgSize = 1): boolean {
     const specBonus = 1 + this.world.getMarkerByIdx(cell.idx, MARKER_EAT) / 255;
     // Active feeding should require "working tissue": if you have 0 energy, you can't do work.
@@ -1025,8 +1077,10 @@ export class RuleEvaluator {
       const repairedRule = Math.floor((idx - CONDITIONS_OFFSET) / RULE_SIZE) & 0xff;
       const [r0, r1, r2] = this.world.getRuleRoutesByIdx(cell.idx);
       const quorum01 = Math.max(0, Math.min(1, kinSum / 4));
+      const groupSize = Math.max(1, this.sameOrgConnectedGroupSize(cell.idx, cell.orgId));
+      const netStability = Math.max(0, Math.min(1, Math.log2(groupSize) / 6)); // 1..64 => ~0..1
       // High quorum makes rewiring more stable; low quorum jitters more.
-      const jitterP = Math.max(0, 0.35 - 0.28 * quorum01);
+      const jitterP = Math.max(0, 0.35 - 0.28 * quorum01) * (1 - 0.75 * netStability);
       let a = r0, b = r1, c = r2;
       if (randomF32() < 0.65 + 0.3 * quorum01) {
         // rotate-in the repaired rule (local memory of what's being worked on)
@@ -1341,6 +1395,8 @@ export class RuleEvaluator {
       const childStored = Math.min(childE, childCap);
       const childOverflow = Math.max(0, childE - childStored);
       this.world.setCell(nx, ny, childId, CellType.Stem, childStored, childTape.getPublicKinTagPacked());
+      // Seed proxy routes immediately so newborns don't start with a degenerate wiring table.
+      this.ensureRuleRoutesForCell(ny * GRID_WIDTH + nx, org, childTape.getRuleCount());
       cell.energy -= childE + REPRODUCE_ACTION_COST;
       cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
       this.envEnergy[cell.idx] += REPRODUCE_ACTION_COST + childOverflow;
@@ -2030,12 +2086,14 @@ export class RuleEvaluator {
   }
 
   private moveOrg(org: Organism, dx: number, dy: number) {
-    const snaps: Array<{ newIdx: number; data: Uint32Array }> = [];
+    const snaps: Array<{ newIdx: number; data: Uint32Array; routes: number; rot: number }> = [];
     for (const idx of org.cells) {
       const base = idx * U32_PER_CELL;
       snaps.push({
         newIdx: (((idx - idx % GRID_WIDTH) / GRID_WIDTH) + dy) * GRID_WIDTH + (idx % GRID_WIDTH + dx),
         data: this.world.cellData.slice(base, base + U32_PER_CELL),
+        routes: this.world.ruleRoutes[idx] >>> 0,
+        rot: this.world.rot[idx] ?? 0,
       });
       for (let i = 0; i < U32_PER_CELL; i++) this.world.cellData[base + i] = 0;
       this.world.ruleRoutes[idx] = 0;
@@ -2044,7 +2102,34 @@ export class RuleEvaluator {
     org.cells.clear();
     for (const s of snaps) {
       this.world.cellData.set(s.data, s.newIdx * U32_PER_CELL);
+      this.world.ruleRoutes[s.newIdx] = s.routes;
+      this.world.rot[s.newIdx] = s.rot;
       org.cells.add(s.newIdx);
     }
+  }
+
+  private ensureRuleRoutesForCell(cellIdx: number, org: Organism, ruleCount: number): void {
+    if (ruleCount <= 0) return;
+    const [a, b, c] = this.world.getRuleRoutesByIdx(cellIdx);
+    // Treat (0,0,0) as uninitialized; allow legitimate 0 in other slots.
+    if ((a | b | c) !== 0) return;
+
+    const sig = this.world.getMarkerByIdx(cellIdx, MARKER_SIGNAL) & 0xff;
+    const dig = this.world.getMarkerByIdx(cellIdx, MARKER_DIGEST) & 0xff;
+    const eat = this.world.getMarkerByIdx(cellIdx, MARKER_EAT) & 0xff;
+    const mA = Math.floor(Math.max(0, Math.min(255, this.world.getMorphogenA(cellIdx) * 20))) & 0xff;
+    const mB = Math.floor(Math.max(0, Math.min(255, this.world.getMorphogenB(cellIdx) * 20))) & 0xff;
+
+    // Simple u32 mix (deterministic): spatial + chemistry + lineage.
+    let x = (cellIdx ^ (org.id * 2654435761)) >>> 0;
+    x ^= (sig << 24) ^ (dig << 16) ^ (eat << 8) ^ mA;
+    x = Math.imul(x ^ (x >>> 16), 2246822519) >>> 0;
+    x ^= mB * 3266489917;
+    x = Math.imul(x ^ (x >>> 13), 3266489917) >>> 0;
+
+    const r0 = x % ruleCount;
+    const r1 = (r0 + 1 + ((x >>> 8) % Math.max(1, ruleCount - 1))) % ruleCount;
+    const r2 = (r1 + 1 + ((x >>> 16) % Math.max(1, ruleCount - 1))) % ruleCount;
+    this.world.setRuleRoutesByIdx(cellIdx, r0, r1, r2);
   }
 }

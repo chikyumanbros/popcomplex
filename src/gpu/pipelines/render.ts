@@ -20,6 +20,7 @@ export function createRenderPipeline(
       { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
       { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
       { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+      { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
     ],
   });
 
@@ -48,6 +49,7 @@ export function createRenderPipeline(
         { binding: 1, resource: { buffer: buffers.cellState[0] } },
         { binding: 2, resource: { buffer: buffers.envEnergy[0] } },
         { binding: 3, resource: { buffer: buffers.componentMask } },
+        { binding: 4, resource: { buffer: buffers.rot } },
       ],
     }),
     gpu.device.createBindGroup({
@@ -57,6 +59,7 @@ export function createRenderPipeline(
         { binding: 1, resource: { buffer: buffers.cellState[1] } },
         { binding: 2, resource: { buffer: buffers.envEnergy[1] } },
         { binding: 3, resource: { buffer: buffers.componentMask } },
+        { binding: 4, resource: { buffer: buffers.rot } },
       ],
     }),
   ];

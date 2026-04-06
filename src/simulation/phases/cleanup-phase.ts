@@ -25,7 +25,8 @@ export function cleanupDeadOrganismsPhase(d: CleanupPhaseDeps, u32PerCell: numbe
   // Deterministic rot progression: time-to-dissolve ~= 1/baseDiss ticks at size=1 (like the old expected lifetime).
   // Larger connected components slow rot (network self-maintenance). No hard "death confirmation" threshold besides rot>=1.
   const ROT_RECOVERY_PER_TICK = 0.08; // when alive, rot bleeds off quickly
-  const STOMACH_LEAK_FRAC = 0.10; // dead tissue leaks gut contents each tick
+  // Dead-tissue gut leak is handled in `RuleEvaluator` so it can preferentially be recovered by
+  // same-org living neighbors into stomach (network self-maintenance). Cleanup phase only tracks rot+dissolve.
 
   const dead: number[] = [];
   for (const org of d.organisms.organisms.values()) {
@@ -41,38 +42,6 @@ export function cleanupDeadOrganismsPhase(d: CleanupPhaseDeps, u32PerCell: numbe
       if (e > 0) {
         d.world.rot[idx] = Math.max(0, d.world.rot[idx] - ROT_RECOVERY_PER_TICK);
         continue;
-      }
-
-      // Dead-tissue stomach leak: distribute gut contents into local environment (self + neighbors).
-      const s0 = d.world.getStomachByIdx(idx);
-      if (s0 > 1e-6) {
-        const leak = Math.min(s0, s0 * STOMACH_LEAK_FRAC);
-        d.world.setStomachByIdx(idx, s0 - leak);
-        const x = idx % d.gridWidth;
-        const y = (idx - x) / d.gridWidth;
-        let n = 1;
-        if (x > 0) n++;
-        if (x + 1 < d.gridWidth) n++;
-        if (y > 0) n++;
-        if (y + 1 < d.gridHeight) n++;
-        if (d.neighborModeEight) {
-          if (x > 0 && y > 0) n++;
-          if (x + 1 < d.gridWidth && y > 0) n++;
-          if (x > 0 && y + 1 < d.gridHeight) n++;
-          if (x + 1 < d.gridWidth && y + 1 < d.gridHeight) n++;
-        }
-        const share = leak / n;
-        d.envEnergy[idx] += share;
-        if (x > 0) d.envEnergy[idx - 1] += share;
-        if (x + 1 < d.gridWidth) d.envEnergy[idx + 1] += share;
-        if (y > 0) d.envEnergy[idx - d.gridWidth] += share;
-        if (y + 1 < d.gridHeight) d.envEnergy[idx + d.gridWidth] += share;
-        if (d.neighborModeEight) {
-          if (x > 0 && y > 0) d.envEnergy[idx - d.gridWidth - 1] += share;
-          if (x + 1 < d.gridWidth && y > 0) d.envEnergy[idx - d.gridWidth + 1] += share;
-          if (x > 0 && y + 1 < d.gridHeight) d.envEnergy[idx + d.gridWidth - 1] += share;
-          if (x + 1 < d.gridWidth && y + 1 < d.gridHeight) d.envEnergy[idx + d.gridWidth + 1] += share;
-        }
       }
 
       // Rot progression: baseDiss becomes per-tick rot delta (expected time ~ 1/baseDiss).
