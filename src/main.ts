@@ -85,7 +85,48 @@ async function main() {
   const chartCanvas = document.getElementById('ecology-chart') as HTMLCanvasElement | null;
   const ecologyChart = chartCanvas ? new EcologyTrendChart(chartCanvas) : null;
 
-  setupInspector(canvas, world, organisms, ui);
+  const componentMaskCpu = new Uint32Array(GRID_WIDTH * GRID_HEIGHT);
+  let selectedComponentSeedIdx: number | null = null;
+  let selectedComponentOrgId: number | null = null;
+
+  function rebuildSelectedComponentMask() {
+    componentMaskCpu.fill(0);
+    if (selectedComponentSeedIdx === null || selectedComponentOrgId === null) return;
+    const seed = selectedComponentSeedIdx;
+    const orgId = selectedComponentOrgId;
+    if (world.getOrganismIdByIdx(seed) !== orgId) return;
+
+    const q: number[] = [seed];
+    componentMaskCpu[seed] = 1;
+    let qi = 0;
+    const use8 = cfg.neighborMode === 'eight';
+    while (qi < q.length) {
+      const idx = q[qi++]!;
+      const x = idx % GRID_WIDTH;
+      const y = (idx - x) / GRID_WIDTH;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (!use8 && dx !== 0 && dy !== 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+          const ni = ny * GRID_WIDTH + nx;
+          if (componentMaskCpu[ni] !== 0) continue;
+          if (world.getOrganismIdByIdx(ni) !== orgId) continue;
+          componentMaskCpu[ni] = 1;
+          q.push(ni);
+        }
+      }
+    }
+  }
+
+  setupInspector(canvas, world, organisms, ui, (idx, orgId) => {
+    selectedComponentSeedIdx = idx;
+    selectedComponentOrgId = orgId;
+    rebuildSelectedComponentMask();
+    gpu.device.queue.writeBuffer(buffers.componentMask, 0, componentMaskCpu.buffer);
+  });
 
   ruleEval.snapClosedEnergyBudgetFromWorld();
 
@@ -282,6 +323,11 @@ async function main() {
     // GPU: display only — full sim (rules, metabolism, neural propagation) runs on CPU first.
     world.uploadTo(gpu!.device, buffers.cellState[0]);
     gpu!.device.queue.writeBuffer(buffers.envEnergy[0], 0, ruleEval.envEnergy.buffer);
+    // Selection mask can become stale if the organism moved/split/died; rebuild cheaply when selected.
+    if (selectedComponentSeedIdx !== null && selectedComponentOrgId !== null && advanced) {
+      rebuildSelectedComponentMask();
+      gpu!.device.queue.writeBuffer(buffers.componentMask, 0, componentMaskCpu.buffer);
+    }
 
     writeUniform(gpu!.device, buffers.uniform, tick, 0, ui.viewX, ui.viewY, ui.viewZoom, ui.viewMode);
     const encoder = gpu!.device.createCommandEncoder({ label: 'render' });

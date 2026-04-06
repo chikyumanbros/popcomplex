@@ -17,6 +17,7 @@ struct VertexOutput {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> cellState: array<u32>;
 @group(0) @binding(2) var<storage, read> envEnergy: array<f32>;
+@group(0) @binding(3) var<storage, read> componentMask: array<u32>;
 
 fn getCellType(index: u32) -> u32 {
   return cellState[index * 8u + 1u] & 0xFFu;
@@ -98,6 +99,24 @@ fn applyNeuralTint(base: vec3f, neuralState: u32) -> vec3f {
     c = mix(c, c * vec3f(0.72, 0.78, 1.08), 0.42);
   }
   return c;
+}
+
+fn isMasked(index: u32) -> bool {
+  return componentMask[index] != 0u;
+}
+
+fn maskedEdge4(index: u32) -> bool {
+  if (!isMasked(index)) { return false; }
+  let x = index % u.width;
+  let y = index / u.width;
+  if (x == 0u || x + 1u >= u.width || y == 0u || y + 1u >= u.height) {
+    return true;
+  }
+  let up = index - u.width;
+  let dn = index + u.width;
+  let lf = index - 1u;
+  let rt = index + 1u;
+  return (!isMasked(up) || !isMasked(dn) || !isMasked(lf) || !isMasked(rt));
 }
 
 @vertex
@@ -210,5 +229,17 @@ fn frag(@location(0) uv: vec2f) -> @location(0) vec4f {
   }
 
   color = min(color * 1.04, vec3f(1.0));
+
+  // Component highlight overlay (thin outline + soft fill).
+  if (isMasked(index)) {
+    let fill = vec3f(0.18, 0.40, 0.95);
+    let edgeBoost = select(0.0, 1.0, maskedEdge4(index));
+    // Sub-cell edge emphasis: stronger near pixel edges.
+    let sub = 1.0 - smoothstep(0.03, 0.14, edgeDist);
+    let outline = edgeBoost * (0.55 + 0.45 * sub);
+    let alphaFill = 0.14;
+    color = mix(color, min(vec3f(1.0), color + fill * alphaFill), 1.0);
+    color = mix(color, min(vec3f(1.0), fill), outline);
+  }
   return vec4f(color, 1.0);
 }

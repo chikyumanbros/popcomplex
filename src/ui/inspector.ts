@@ -11,6 +11,7 @@ export function setupInspector(
   world: World,
   organisms: OrganismManager,
   ui: UIState,
+  onSelect?: (idx: number, orgId: number) => void,
 ) {
   const infoEl = document.getElementById('inspector')!;
 
@@ -42,6 +43,7 @@ export function setupInspector(
     }
 
     const idx = gy * GRID_WIDTH + gx;
+    onSelect?.(idx, orgId);
     const energy = world.getCellEnergy(gx, gy).toFixed(1).padStart(6, '\u2007');
     const stomach = world.getStomachByIdx(idx).toFixed(1).padStart(6, '\u2007');
     const morphA = world.getMorphogenA(idx).toFixed(2).padStart(5, '\u2007');
