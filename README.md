@@ -124,9 +124,11 @@ Copy uses write noise, per-byte XOR bit-flips, rare **random byte swaps**, and a
 
 Wear is a **single-bit XOR** plus a bump to the parallel `degradation[]` track. Hit probability is scaled by **`tapeByteDegradationSensitivity`** (`TAPE_DEGRAD_SENS_*` in `tape.ts`): e.g. maxCells, replication key, **rule opcode bytes**, refractory (byte 32), and the NN band are harder to corrupt than generic literals — easy to retune for ecology experiments.
 
-### Child `degradation` is always reset
+### Child `degradation` starts clean (but degraded birth can add initial wear)
 
-`transcribe` / `transcribeForReproduction` return `new Tape(data)` with a **fresh zero** wear array. Parent **degradation** never copies to offspring: it only **biases** transcription noise (especially on the replication key) and stillbirth risk. That keeps “somatic” tape damage from being inherited as if it were sequence — offspring start with a clean error-correction slate while still receiving a noisy **genomic** copy.
+`transcribe` returns `new Tape(data)` with a **fresh zero** wear array. Parent **degradation** never directly copies to offspring: it only **biases** transcription noise (especially on the replication key).
+
+Reproduction uses `transcribeForReproductionOutcome`: instead of hard stillbirth, it can yield a **degraded birth** outcome — a child is still spawned but starts weaker (lower initial energy) and may be given **intentional initial wear / NOPs** as “repair debt” to preserve lineage continuity while penalizing low-fidelity replication.
 
 ### NN weights (bytes 128–255)
 
