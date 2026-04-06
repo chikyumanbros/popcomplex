@@ -198,7 +198,7 @@ async function main() {
       closed = ruleEval.ecosystemEnergyBudget;
       drift = measured - closed;
     }
-    updateStats(tick, organisms.count, stats.fps, closed, measured, drift, ui.viewMode);
+    updateStats(tick, organisms.count, stats.fps, closed, measured, drift, ui.viewMode, ui.viewZoom);
   }
 
   function maybeLogWorldState() {

@@ -42,7 +42,6 @@ export function setViewModeUi(viewMode: number) {
   if (banVal) banVal.textContent = name;
   const banHint = document.getElementById('view-mode-banner-hint');
   if (banHint) banHint.textContent = `${idx} · V next`;
-  setStat('stat-view', `${name} (${idx})`);
 }
 
 /** Same mapping as `render.wgsl` viewUV → cell index (screen px → grid). */
@@ -187,8 +186,17 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
   // Zoom with scroll
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const normX = (e.clientX - rect.left) / rect.width;
+    const normY = (e.clientY - rect.top) / rect.height;
+    const worldXBefore = (normX - 0.5) / state.viewZoom + state.viewX / GRID_WIDTH + 0.5;
+    const worldYBefore = (normY - 0.5) / state.viewZoom + state.viewY / GRID_HEIGHT + 0.5;
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    state.viewZoom = Math.max(0.5, Math.min(20, state.viewZoom * zoomFactor));
+    const nextZoom = Math.max(0.5, Math.min(20, state.viewZoom * zoomFactor));
+    state.viewZoom = nextZoom;
+    // Keep the same world point under the cursor (cursor-centered zoom).
+    state.viewX = (worldXBefore - 0.5 - (normX - 0.5) / nextZoom) * GRID_WIDTH;
+    state.viewY = (worldYBefore - 0.5 - (normY - 0.5) / nextZoom) * GRID_HEIGHT;
     clientToGrid(canvas, state, e.clientX, e.clientY);
   }, { passive: false });
 
@@ -244,6 +252,7 @@ export function updateStats(
   measured: number,
   drift: number,
   viewMode: number,
+  viewZoom: number,
 ) {
   setStat('stat-tick', String(tick));
   setStat('stat-org', String(orgCount));
@@ -255,4 +264,8 @@ export function updateStats(
   setStat('stat-meas', `${(measured / 1e6).toFixed(3)}M`);
   setStat('stat-drift', drift >= 0 ? `+${drift.toFixed(2)}` : drift.toFixed(2));
   setViewModeUi(viewMode);
+  const m = ((viewMode % VIEW_MODE_COUNT) + VIEW_MODE_COUNT) % VIEW_MODE_COUNT;
+  const name = VIEW_MODE_NAMES[m] ?? '?';
+  const idx = `${m + 1}/${VIEW_MODE_COUNT}`;
+  setStat('stat-view', `${name} (${idx}) z=${viewZoom.toFixed(2)}`);
 }
