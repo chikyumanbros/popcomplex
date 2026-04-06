@@ -88,6 +88,7 @@ async function main() {
   const componentMaskCpu = new Uint32Array(GRID_WIDTH * GRID_HEIGHT);
   let selectedComponentSeedIdx: number | null = null;
   let selectedComponentOrgId: number | null = null;
+  let lastComponentHighlight = ui.componentHighlight;
 
   function rebuildSelectedComponentMask() {
     componentMaskCpu.fill(0);
@@ -125,7 +126,9 @@ async function main() {
     selectedComponentSeedIdx = idx;
     selectedComponentOrgId = orgId;
     rebuildSelectedComponentMask();
-    gpu.device.queue.writeBuffer(buffers.componentMask, 0, componentMaskCpu.buffer);
+    if (ui.componentHighlight) {
+      gpu.device.queue.writeBuffer(buffers.componentMask, 0, componentMaskCpu.buffer);
+    }
   });
 
   ruleEval.snapClosedEnergyBudgetFromWorld();
@@ -323,8 +326,20 @@ async function main() {
     // GPU: display only — full sim (rules, metabolism, neural propagation) runs on CPU first.
     world.uploadTo(gpu!.device, buffers.cellState[0]);
     gpu!.device.queue.writeBuffer(buffers.envEnergy[0], 0, ruleEval.envEnergy.buffer);
+    // Component highlight toggle: on->upload current, off->zero once.
+    if (ui.componentHighlight !== lastComponentHighlight) {
+      lastComponentHighlight = ui.componentHighlight;
+      if (!ui.componentHighlight) {
+        componentMaskCpu.fill(0);
+        gpu!.device.queue.writeBuffer(buffers.componentMask, 0, componentMaskCpu.buffer);
+      } else if (selectedComponentSeedIdx !== null && selectedComponentOrgId !== null) {
+        rebuildSelectedComponentMask();
+        gpu!.device.queue.writeBuffer(buffers.componentMask, 0, componentMaskCpu.buffer);
+      }
+    }
+
     // Selection mask can become stale if the organism moved/split/died; rebuild cheaply when selected.
-    if (selectedComponentSeedIdx !== null && selectedComponentOrgId !== null && advanced) {
+    if (ui.componentHighlight && selectedComponentSeedIdx !== null && selectedComponentOrgId !== null && advanced) {
       rebuildSelectedComponentMask();
       gpu!.device.queue.writeBuffer(buffers.componentMask, 0, componentMaskCpu.buffer);
     }

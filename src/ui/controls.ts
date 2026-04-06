@@ -24,6 +24,7 @@ export interface UIState {
   viewY: number;
   viewZoom: number;
   viewMode: number;
+  componentHighlight: boolean;
   stepRequested: boolean;
 }
 
@@ -93,6 +94,7 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
     viewY: 0,
     viewZoom: 1,
     viewMode: 0,
+    componentHighlight: true,
     stepRequested: false,
   };
 
@@ -123,7 +125,7 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
     </div>
     <div class="control-row hint">
       Shift+click: inspect · Scroll: zoom · Middle-drag: pan<br>
-      <kbd>V</kbd>: cycle field view (default → env → morph → stomach → markers → energy)
+      <kbd>V</kbd>: cycle field view (default → env → morph → stomach → markers → energy) · <kbd>H</kbd>: toggle component highlight
     </div>
     <div class="view-mode-banner" title="Press V to cycle — same as top-right header pill">
       <span class="view-mode-banner-label">Field view</span>
@@ -212,6 +214,14 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
     e.preventDefault();
     state.viewMode = (state.viewMode + 1) % VIEW_MODE_COUNT;
     setViewModeUi(state.viewMode);
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'h' && e.key !== 'H') return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    e.preventDefault();
+    state.componentHighlight = !state.componentHighlight;
   });
 
   setViewModeUi(state.viewMode);
