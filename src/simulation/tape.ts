@@ -189,7 +189,7 @@ export const TAPE_DEGRAD_SENS_ENERGY_CAP_BANK = 0.22;
 export const TAPE_DEGRAD_SENS_REPLICATION_KEY = 0.28;
 export const TAPE_DEGRAD_SENS_RULE_OPCODE = 0.28;
 export const TAPE_DEGRAD_SENS_REFRACTORY = 0.52;
-export const TAPE_DEGRAD_SENS_NN = 1.15;
+export const TAPE_DEGRAD_SENS_NN = 0.85;
 export const TAPE_DEGRAD_SENS_DEFAULT = 1.0;
 /** Public + private kin tags: sturdier than generic literals (mimicry / clade identity). */
 export const TAPE_DEGRAD_SENS_KIN_TAG = 0.34;

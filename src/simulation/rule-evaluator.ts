@@ -24,8 +24,11 @@ import {
   recordBirthFromReproduce,
   recordBirthFromSplit,
   recordGutLeak,
+  recordInvalidOpcodeClamp,
   recordMorphDecayed,
   recordMorphEmitted,
+  recordRepairAttempt,
+  recordRepairSuccess,
   recordReproductionAttempt,
   recordReproductionSuccess,
   recordReproduceFailCrowding,
@@ -99,6 +102,8 @@ const REPAIR_BASE_P         = 0.36; // base success before bias × intensity
 const REPAIR_DEG_HEAL       = 12;   // degradation subtracted on success (primary byte)
 const REPAIR_DEG_HEAL_SPREAD_FRAC = 0.25; // small neighborhood "reflow" per success
 const REPAIR_RULE_BYPASS_BASE_P = 0.18;   // quorum-gated: copy a good rule into a broken slot (re-route)
+/** Extra targeting weight for invalid rule opcode bytes (makes immune repair visibly "keep the program running"). */
+const REPAIR_INVALID_OPCODE_TARGET_BONUS = 220;
 
 // Proxy execution / fail-soft is "distributed redundancy": it should cost something, especially under harsh metabolism.
 const PROXY_EXEC_TAX_BASE = 0.12; // energy units paid to env per proxy attempt (scaled)
@@ -146,9 +151,23 @@ const MOVE_REPEL_FOREIGN_FACE = 14;
 const MOVE_REPEL_MAP_EDGE_FACE = 4;
 const DIAGONAL_MOVE_COST_MULT = Math.SQRT2;
 /** Base diagonal bonus to counter axis-aligned lattice preference. */
-const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_BASE = 0.24;
+const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_BASE = 0;
 /** Extra diagonal bonus scaled by NN move drive (keeps the preference in the NN path). */
-const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN = 0.16;
+const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN = 0;
+
+// ==================== BRANCHING SHAPE BIASES ====================
+/**
+ * DIV target selection: instead of always taking the single max-env neighbor (greedy),
+ * choose stochastically among the best candidates. This increases branching / exploration.
+ */
+const DIV_CHOICE_TOP_K = 4;
+/** Softmax temperature for DIV env-based weights (higher = flatter, more branching). */
+const DIV_CHOICE_TEMP = 6.0;
+/** Small baseline so even low-env empty tiles remain possible. */
+const DIV_CHOICE_BASE_W = 0.15;
+/** Boundary reward: outer cells can feed / interact a bit more (surface-area advantage). */
+const OUTER_EAT_MULT = 1.35;
+const OUTER_ABSORB_MULT = 1.25;
 
 /**
  * ABSORB at a heterospecific face: a single continuous interaction.
@@ -451,6 +470,8 @@ export class RuleEvaluator {
 
   // ==================== NEURAL NETWORK UPDATE ====================
   updateNeuralNetworks() {
+    const dirs = this.neighborDirs();
+    const dirsLen = dirs.length;
     for (const org of this.organisms.organisms.values()) {
       if (org.cells.size === 0) continue;
 
@@ -470,7 +491,7 @@ export class RuleEvaluator {
         const y = (idx - x) / GRID_WIDTH;
         if (this.isOuterCell(idx, org)) boundaryCells++;
 
-        for (const [dx, dy] of this.neighborDirs()) {
+        for (const [dx, dy] of dirs) {
           const nx = x + dx;
           const ny = y + dy;
           if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
@@ -481,7 +502,7 @@ export class RuleEvaluator {
         markerDominance += this.dominantMarker(idx) / 255;
         const c = this.envEnergy[idx];
         let localMax = c;
-        for (const [dx, dy] of this.neighborDirs()) {
+        for (const [dx, dy] of dirs) {
           const nx = x + dx;
           const ny = y + dy;
           if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
@@ -498,7 +519,7 @@ export class RuleEvaluator {
       org.nnInput[2] = Math.min(1, (totalEnv / n) / 50);
       org.nnInput[3] = Math.min(1, n / 64);
       org.nnInput[4] = Math.min(1, boundaryCells / n);
-      org.nnInput[5] = Math.min(1, foreignNeighbors / (n * this.neighborDirs().length));
+      org.nnInput[5] = Math.min(1, foreignNeighbors / (n * dirsLen));
       org.nnInput[6] = Math.min(1, markerDominance / n);
       org.nnInput[7] = Math.min(1, (envGradient / n) / 20);
 
@@ -924,8 +945,18 @@ export class RuleEvaluator {
     if (cell.energy < 0.8) return false;
     const vitality = Math.min(1, cell.energy / 5);
     const coordination = Math.min(1, orgSize / 3); // 1-cell=33%, 2-cell=67%, 3+=100%
+    // Boundary reward: surface-area advantage for feeding.
+    let isBoundary = false;
+    for (const [dx, dy] of this.neighborDirs()) {
+      const nx = cell.x + dx;
+      const ny = cell.y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) { isBoundary = true; break; }
+      const nOrg = this.world.getOrganismId(nx, ny);
+      if (nOrg !== cell.orgId) { isBoundary = true; break; } // includes empty (0) and foreign
+    }
+    const outerMul = isBoundary ? OUTER_EAT_MULT : 1;
     // No baseline intake at zero vitality; passiveAbsorb covers the "inert soaking" path.
-    const maxEat = maxGather * vitality * specBonus * coordination;
+    const maxEat = maxGather * vitality * specBonus * coordination * outerMul;
     let gathered = 0;
     const spots: [number, number][] = [[cell.x, cell.y]];
     for (const [dx, dy] of this.neighborDirs()) {
@@ -1031,6 +1062,7 @@ export class RuleEvaluator {
 
   /** Immune repair: damaged / invalid-opcode bytes; neighbor quorum includes same-org + partial foreign kin trust. */
   private actionRepair(cell: CellCtx, _org: Organism, tape: Tape, intensity: number): boolean {
+    recordRepairAttempt();
     const kinSum = this.repairQuorumKin(cell);
     const bias = 1 + REPAIR_NEIGHBOR_COEFF * kinSum;
     const socialBias = 1 + SOCIAL_REPAIR_COHESION_BONUS * this.localSignalCohesion(cell);
@@ -1040,7 +1072,7 @@ export class RuleEvaluator {
     const wts: number[] = [];
     for (let i = 0; i < TAPE_SIZE; i++) {
       let w = tape.degradation[i];
-      if (this.isRuleOpcodeByte(i) && tape.data[i] > MAX_VALID_ACTION_OPCODE) w += 52;
+      if (this.isRuleOpcodeByte(i) && tape.data[i] > MAX_VALID_ACTION_OPCODE) w += REPAIR_INVALID_OPCODE_TARGET_BONUS;
       if (w > 0) {
         cands.push(i);
         wts.push(w);
@@ -1064,6 +1096,7 @@ export class RuleEvaluator {
 
     const pTry = Math.min(0.93, REPAIR_BASE_P * bias * inten * socialBias);
     if (randomF32() > pTry) return false;
+    recordRepairSuccess();
 
     // Update local proxy routes toward this repaired site (distributed redundancy wiring).
     if (idx >= CONDITIONS_OFFSET && idx < CONDITIONS_OFFSET + MAX_RULES * RULE_SIZE) {
@@ -1091,6 +1124,7 @@ export class RuleEvaluator {
     // 1) If a rule opcode byte is invalid, first clamp it to NOP (fail-soft: "dead row").
     if (this.isRuleOpcodeByte(idx) && tape.data[idx] > MAX_VALID_ACTION_OPCODE) {
       tape.data[idx] = ActionOpcode.NOP;
+      recordInvalidOpcodeClamp();
     }
 
     // 2) Quorum-gated bypass: if we repaired inside the rule table, sometimes re-route by copying a healthy rule row
@@ -1230,31 +1264,56 @@ export class RuleEvaluator {
     if (org.cells.size >= maxCells) return false;
     if (cell.energy < divCost) return false;
 
-    let bestDir: [number, number] | null = null;
-    let bestEnv = -1;
+    type Cand = { x: number; y: number; env: number };
+    const cands: Cand[] = [];
     for (const [dx, dy] of this.neighborDirs()) {
       const nx = cell.x + dx, ny = cell.y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
       if (!this.world.isEmpty(nx, ny)) continue;
-      const e = this.envEnergy[ny * GRID_WIDTH + nx];
-      if (e > bestEnv) { bestEnv = e; bestDir = [nx, ny]; }
+      cands.push({ x: nx, y: ny, env: this.envEnergy[ny * GRID_WIDTH + nx] });
     }
-    if (!bestDir) return false;
+    if (cands.length === 0) return false;
+
+    cands.sort((a, b) => b.env - a.env);
+    const topK = cands.slice(0, Math.max(1, Math.min(DIV_CHOICE_TOP_K, cands.length)));
+
+    // Softmax over env values (shifted by max for stability), with a small baseline weight.
+    const maxEnv = topK[0]!.env;
+    const temp = Math.max(1e-6, DIV_CHOICE_TEMP);
+    let sumW = 0;
+    const wts = new Float32Array(topK.length);
+    for (let i = 0; i < topK.length; i++) {
+      const z = (topK[i]!.env - maxEnv) / temp;
+      const w = DIV_CHOICE_BASE_W + Math.exp(z);
+      wts[i] = w;
+      sumW += w;
+    }
+    if (!(sumW > 0)) return false;
+
+    let r = randomF32() * sumW;
+    let pick = 0;
+    for (let i = 0; i < wts.length; i++) {
+      r -= wts[i]!;
+      if (r <= 0) { pick = i; break; }
+      pick = i;
+    }
+    const chosen = topK[pick]!;
 
     const overhead = divCost * 0.15;
     const childE = divCost - overhead;
     const childCap = this.safeCellEnergyCapForOrg(cell.orgId);
     const childStored = Math.min(childE, childCap);
     const childOverflow = Math.max(0, childE - childStored);
-    const childType = this.chooseChildCellType(cell, org, bestDir[0], bestDir[1]);
+    const childType = this.chooseChildCellType(cell, org, chosen.x, chosen.y);
     this.world.setCell(
-      bestDir[0],
-      bestDir[1],
+      chosen.x,
+      chosen.y,
       cell.orgId,
       childType,
       childStored,
       tape.getPublicKinTagPacked(),
     );
-    org.cells.add(bestDir[1] * GRID_WIDTH + bestDir[0]);
+    org.cells.add(chosen.y * GRID_WIDTH + chosen.x);
     cell.energy -= divCost;
     cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
     this.envEnergy[cell.idx] += overhead + childOverflow;
@@ -1406,6 +1465,15 @@ export class RuleEvaluator {
   }
 
   private actionAbsorb(cell: CellCtx, maxSteal: number): boolean {
+    // Boundary reward: outer tissue has more "interface work" capacity.
+    let boundary = false;
+    for (const [dx, dy] of this.neighborDirs()) {
+      const nx = cell.x + dx, ny = cell.y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) { boundary = true; break; }
+      if (this.world.getOrganismId(nx, ny) !== cell.orgId) { boundary = true; break; }
+    }
+    const outerMul = boundary ? OUTER_ABSORB_MULT : 1;
+    const maxStealEff = maxSteal * outerMul;
     for (const [dx, dy] of this.neighborDirs()) {
       const nx = cell.x + dx, ny = cell.y + dy;
       if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
@@ -1431,7 +1499,7 @@ export class RuleEvaluator {
       const wSteal = 1 - morphAffinity;
 
       // 1) Steal (neighbor cell energy -> actor stomach)
-      const steal = Math.min(ne, maxSteal * I * wSteal);
+      const steal = Math.min(ne, maxStealEff * I * wSteal);
       let neAfter = ne;
       if (steal > 1e-8) {
         neAfter = ne - steal;

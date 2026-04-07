@@ -8,6 +8,9 @@ export interface TelemetrySnapshot {
   ruleDuplications: number;
   ruleSwaps: number;
   dataDuplications: number;
+  repairAttempts: number;
+  repairSuccess: number;
+  invalidOpcodeClamps: number;
   reproductionAttempts: number;
   reproductionSuccess: number;
   birthsFromReproduce: number;
@@ -47,6 +50,9 @@ const counters: TelemetrySnapshot = {
   ruleDuplications: 0,
   ruleSwaps: 0,
   dataDuplications: 0,
+  repairAttempts: 0,
+  repairSuccess: 0,
+  invalidOpcodeClamps: 0,
   reproductionAttempts: 0,
   reproductionSuccess: 0,
   birthsFromReproduce: 0,
@@ -102,6 +108,15 @@ export function recordRuleSwap() {
 }
 export function recordDataDuplication() {
   bump('dataDuplications');
+}
+export function recordRepairAttempt() {
+  bump('repairAttempts');
+}
+export function recordRepairSuccess() {
+  bump('repairSuccess');
+}
+export function recordInvalidOpcodeClamp() {
+  bump('invalidOpcodeClamps');
 }
 export function recordReproductionAttempt() {
   bump('reproductionAttempts');
@@ -169,6 +184,9 @@ export function snapshotAndResetTelemetry(): TelemetrySnapshot {
     ruleDuplications: counters.ruleDuplications,
     ruleSwaps: counters.ruleSwaps,
     dataDuplications: counters.dataDuplications,
+    repairAttempts: counters.repairAttempts,
+    repairSuccess: counters.repairSuccess,
+    invalidOpcodeClamps: counters.invalidOpcodeClamps,
     reproductionAttempts: counters.reproductionAttempts,
     reproductionSuccess: counters.reproductionSuccess,
     birthsFromReproduce: counters.birthsFromReproduce,
@@ -205,6 +223,9 @@ export function snapshotAndResetTelemetry(): TelemetrySnapshot {
   counters.ruleDuplications = 0;
   counters.ruleSwaps = 0;
   counters.dataDuplications = 0;
+  counters.repairAttempts = 0;
+  counters.repairSuccess = 0;
+  counters.invalidOpcodeClamps = 0;
   counters.reproductionAttempts = 0;
   counters.reproductionSuccess = 0;
   counters.birthsFromReproduce = 0;
@@ -244,6 +265,9 @@ export function snapshotTelemetry(): TelemetrySnapshot {
     ruleDuplications: counters.ruleDuplications,
     ruleSwaps: counters.ruleSwaps,
     dataDuplications: counters.dataDuplications,
+    repairAttempts: counters.repairAttempts,
+    repairSuccess: counters.repairSuccess,
+    invalidOpcodeClamps: counters.invalidOpcodeClamps,
     reproductionAttempts: counters.reproductionAttempts,
     reproductionSuccess: counters.reproductionSuccess,
     birthsFromReproduce: counters.birthsFromReproduce,

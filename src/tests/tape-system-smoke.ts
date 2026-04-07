@@ -9,6 +9,13 @@ import {
   tapeSnapshotBase64,
   decodeTapeSnapshotBase64,
   tapeFromSnapshot,
+  TAPE_DEGRAD_SENS_DEFAULT,
+  TAPE_DEGRAD_SENS_ENERGY_CAP_BANK,
+  TAPE_DEGRAD_SENS_KIN_TAG,
+  TAPE_DEGRAD_SENS_MAXCELLS,
+  TAPE_DEGRAD_SENS_NN,
+  TAPE_DEGRAD_SENS_REPLICATION_KEY,
+  TAPE_DEGRAD_SENS_RULE_OPCODE,
 } from '../simulation/tape';
 import { isProtectedDataDupTarget } from '../simulation/transcription';
 import { World } from '../simulation/world';
@@ -55,6 +62,17 @@ function testProtoRuleTableSanity() {
     assert.ok(rawOpcode <= MAX_VALID_ACTION_OPCODE, `proto raw opcode out of range at rule ${i}`);
     assert.ok(rule.actionParam >= 0 && rule.actionParam < 32, `proto actionParam must target data node at rule ${i}`);
   }
+}
+
+function testDegradationSensitivityContract() {
+  // Keep docs/architecture intent stable: important bands should degrade no faster than default bytes.
+  assert.ok(TAPE_DEGRAD_SENS_DEFAULT > 0, 'default tape degradation sensitivity must be positive');
+  assert.ok(TAPE_DEGRAD_SENS_NN <= TAPE_DEGRAD_SENS_DEFAULT, 'NN band should be sturdier than default bytes');
+  assert.ok(TAPE_DEGRAD_SENS_REPLICATION_KEY <= TAPE_DEGRAD_SENS_DEFAULT, 'replication key should be sturdier than default bytes');
+  assert.ok(TAPE_DEGRAD_SENS_RULE_OPCODE <= TAPE_DEGRAD_SENS_DEFAULT, 'rule opcode bytes should be sturdier than default bytes');
+  assert.ok(TAPE_DEGRAD_SENS_ENERGY_CAP_BANK <= TAPE_DEGRAD_SENS_DEFAULT, 'module bank bytes should be sturdier than default bytes');
+  assert.ok(TAPE_DEGRAD_SENS_KIN_TAG <= TAPE_DEGRAD_SENS_DEFAULT, 'kin tag bytes should be sturdier than default bytes');
+  assert.ok(TAPE_DEGRAD_SENS_MAXCELLS <= TAPE_DEGRAD_SENS_DEFAULT, 'maxCells should be sturdier than default bytes');
 }
 
 function testSnapshotRoundtrip() {
@@ -155,6 +173,7 @@ function main() {
   testProtoMoveGate();
   testDataDupProtectionScope();
   testProtoRuleTableSanity();
+  testDegradationSensitivityContract();
   testSnapshotRoundtrip();
   testSpillLocalRedistribution();
   testJamBlocksCrossLineageTransferAndAbsorbCoupling();

@@ -3,7 +3,7 @@
  * Written in English in the doc blocks; user-facing button label is Japanese in UI.
  */
 
-import { GRID_WIDTH, GRID_HEIGHT, TOTAL_CELLS } from './constants';
+import { GRID_WIDTH, GRID_HEIGHT, INITIAL_ENV_ENERGY_PER_CELL, TOTAL_CELLS } from './constants';
 import {
   NN_TAPE_WEIGHT_CENTER,
   NN_TAPE_WEIGHT_SCALE,
@@ -25,6 +25,13 @@ import { measureEnergyBookkeeping, biomassReservoirTotal, type EnergyBookkeeping
 import { getRandomSeed } from './rng';
 import { countInvalidRuleOpcodes } from './tape-health';
 import type { TelemetrySnapshot } from './telemetry';
+
+function percentile(sorted: number[], p01: number): number {
+  if (sorted.length === 0) return 0;
+  const p = Math.max(0, Math.min(1, p01));
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))));
+  return sorted[idx]!;
+}
 
 function tapeHexDump(data: Uint8Array): string {
   const labels: Record<number, string> = {
@@ -264,10 +271,18 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   lines.push(`- **sum(morphA) / morphB** (not in closed budget): ${bk.morphA.toFixed(1)} / ${bk.morphB.toFixed(1)}`);
   if (telemetrySnapshot) {
     const t = telemetrySnapshot;
+    const repairExec = t.actionExec?.[0x0c] ?? 0;
+    const repairSucc = (t as any).repairSuccess;
+    const repairAtt = (t as any).repairAttempts;
+    const clampN = (t as any).invalidOpcodeClamps;
     lines.push(
       `- **telemetry (since last reset)**: emitA=${t.morphAEmitted.toFixed(2)} emitB=${t.morphBEmitted.toFixed(2)} ` +
         `decayA=${t.morphADecayed.toFixed(2)} decayB=${t.morphBDecayed.toFixed(2)} ` +
-        `gutLeak=${t.gutLeakTotal.toFixed(2)} recovered=${t.gutLeakRecovered.toFixed(2)} toEnv=${t.gutLeakToEnv.toFixed(2)}`,
+        `gutLeak=${t.gutLeakTotal.toFixed(2)} recovered=${t.gutLeakRecovered.toFixed(2)} toEnv=${t.gutLeakToEnv.toFixed(2)} ` +
+        `repairExec=${repairExec}` +
+        (typeof repairAtt === 'number' ? ` repairAtt=${repairAtt}` : '') +
+        (typeof repairSucc === 'number' ? ` repairSucc=${repairSucc}` : '') +
+        (typeof clampN === 'number' ? ` invalidClamp=${clampN}` : ''),
     );
   }
   if (ui) {
@@ -277,6 +292,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
 
   lines.push('### Build / grid');
   lines.push(`- **grid**: ${GRID_WIDTH}×${GRID_HEIGHT}`);
+  lines.push(`- **initial env per cell**: ${INITIAL_ENV_ENERGY_PER_CELL} (see \`INITIAL_ENV_ENERGY_PER_CELL\`)`);
   lines.push(`- **proto NN seed (fixed starter)**: 0x${PROTO_TAPE_NN_SEED.toString(16)}`);
   lines.push('');
 
@@ -316,10 +332,37 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
 
+  // Tape health distribution (ecosystem-wide).
+  const invalidPerOrg: number[] = [];
+  let digestIntactOrgs = 0;
+  let digestIntactCells = 0;
+  for (const org of orgList) {
+    const rules = countInvalidRuleOpcodes(org.tape.data);
+    invalidPerOrg.push(rules.invalid);
+    if (org.tape.isDigestModuleIntact()) {
+      digestIntactOrgs++;
+      digestIntactCells += org.cells.size;
+    }
+  }
+  invalidPerOrg.sort((a, b) => a - b);
+
   lines.push('### Ecosystem observability snapshot');
   lines.push(`- **mood mix by organism**: ${moodOrgLine}`);
   lines.push(`- **mood mix by occupied cells**: ${moodCellLine}`);
   lines.push(`- **size classes (org count)**: micro(1)=${micro}, small(2-4)=${small}, medium(5-15)=${medium}, macro(16+)=${macro}`);
+  if (invalidPerOrg.length > 0) {
+    lines.push(
+      `- **invalidOpcode per organism (rules table)**: ` +
+        `p50=${percentile(invalidPerOrg, 0.50).toFixed(0)} ` +
+        `p90=${percentile(invalidPerOrg, 0.90).toFixed(0)} ` +
+        `p99=${percentile(invalidPerOrg, 0.99).toFixed(0)} ` +
+        `max=${percentile(invalidPerOrg, 1.00).toFixed(0)} (out of 16)`,
+    );
+  }
+  lines.push(
+    `- **digest module intact**: orgs=${digestIntactOrgs}/${Math.max(1, orgList.length)} ` +
+      `cells=${digestIntactCells}/${Math.max(1, occupied)}`,
+  );
   if (topLineages.length > 0) {
     lines.push(
       `- **top lineages by occupied cells** (public kin “face” only): ${topLineages.map(([lin, c]) => `0x${lin.toString(16).padStart(6, '0')}:${c} (${((c / Math.max(1, occupied)) * 100).toFixed(1)}%)`).join(' | ')}`,
