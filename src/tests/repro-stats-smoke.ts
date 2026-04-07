@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { INITIAL_ENV_ENERGY_PER_CELL, GRID_WIDTH, GRID_HEIGHT } from '../simulation/constants';
+import { GRID_WIDTH, GRID_HEIGHT } from '../simulation/constants';
 import { World } from '../simulation/world';
 import { OrganismManager } from '../simulation/organism';
 import { RuleEvaluator } from '../simulation/rule-evaluator';
@@ -7,6 +7,7 @@ import { createProtoTape, REPLICATION_KEY_LEN, REPLICATION_KEY_OFFSET } from '..
 import { transcribeForReproduction } from '../simulation/transcription';
 import { setRandomSeed } from '../simulation/rng';
 import { biomassReservoirTotal, measureEnergyBookkeeping } from '../simulation/energy-metrics';
+import { initSimulation } from '../simulation/init-simulation';
 
 interface MiniSnapshot {
   orgCount: number;
@@ -40,20 +41,15 @@ function runMiniSimulation(seed: number, ticks: number): MiniSnapshot {
     distressFireChanceScale: 0.3,
   });
 
-  const env = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
-  env.fill(INITIAL_ENV_ENERGY_PER_CELL);
-  ruleEval.setEnvEnergy(env);
-  ruleEval.snapClosedEnergyBudgetFromWorld();
-
   const spawnEnergy = 150;
-  const cx = Math.floor(GRID_WIDTH / 2);
-  const cy = Math.floor(GRID_HEIGHT / 2);
-  const tape = createProtoTape();
-  const ok = ruleEval.withdrawEnvUniform(spawnEnergy);
-  assert.equal(ok, true, 'spawn withdraw must succeed in mini simulation');
-  const id = world.spawnProto(cx, cy, tape.getLineagePacked(), spawnEnergy);
-  organisms.register(id, tape, { parentId: null, birthTick: 0 });
-  organisms.get(id)?.cells.add(cy * GRID_WIDTH + cx);
+  initSimulation(world, organisms, ruleEval, {
+    env: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
+    spawnEnergy,
+    culture: false,
+    multiOrigin: false,
+    protoTape: createProtoTape(),
+  });
+  assert.equal(organisms.count, 1, 'mini simulation must start with a single proto');
 
   for (let t = 0; t < ticks; t++) {
     organisms.syncNeuralWeightsFromTape();

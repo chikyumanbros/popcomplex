@@ -10,6 +10,7 @@
     "test:tape": "tsx src/tests/tape-system-smoke.ts",
     "test:repro": "tsx src/tests/repro-stats-smoke.ts",
     "test:design": "tsx src/tests/design-gate.ts",
+    "test:init": "tsx src/tests/init-consistency-smoke.ts",
     "test:design:search": "tsx src/tests/design-search.ts",
     "experiment:run": "tsx src/experiments/run-headless.ts",
     "experiment:stability": "tsx src/experiments/run-stability-benchmark.ts",

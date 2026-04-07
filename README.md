@@ -38,6 +38,7 @@ Quick tape/NN smoke checks:
 npm run test:tape
 npm run test:repro
 npm run test:design
+npm run test:init
 ```
 
 ## Tuning acceptance gate (anti-arbitrary)
@@ -87,6 +88,8 @@ Browser query options (examples):
 
 - `?multiOrigin=1` — spawn three initial clades.
 - `?culture=1` — conservative nutrient hotspots (culture-dish mode; total env energy preserved).
+- `?culture=0&multiOrigin=1` — headless-like multi-origin without conservative rescale (env total increases at init).
+- `?culture=0&multiOrigin=0` — single-origin baseline (one proto at center, no inoculation bumps).
 
 **Spatial topology**: the simulation uses **Moore (8-neighbor)** adjacency everywhere (rules, diffusion, connectivity, MOVE, EAT sampling, etc.). There is no separate 4-neighbor mode or `?neighbor=` switch.
 

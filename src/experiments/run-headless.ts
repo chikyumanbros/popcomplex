@@ -1,15 +1,15 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { GRID_WIDTH, GRID_HEIGHT, INITIAL_ENV_ENERGY_PER_CELL } from '../simulation/constants';
-import { addRegionalEnvBumps, spawnTricladProtos, DEFAULT_TRICLADE_SITES } from '../simulation/initial-inoculation';
+import { GRID_WIDTH, GRID_HEIGHT } from '../simulation/constants';
 import { World } from '../simulation/world';
 import { OrganismManager } from '../simulation/organism';
 import { RuleEvaluator } from '../simulation/rule-evaluator';
-import { createProtoTape, tapeSnapshotBase64 } from '../simulation/tape';
+import { tapeSnapshotBase64 } from '../simulation/tape';
 import { setRandomSeed, getRandomSeed } from '../simulation/rng';
 import { measureEnergyBookkeeping, measurePopulationMetrics, biomassReservoirTotal } from '../simulation/energy-metrics';
 import { snapshotAndResetTelemetry } from '../simulation/telemetry';
 import type { BudgetMode, SuppressionMode } from '../simulation/runtime-config';
+import { initSimulation } from '../simulation/init-simulation';
 
 interface CliArgs {
   seed: number;
@@ -89,16 +89,15 @@ function main() {
     distressFireChanceScale: args.distressScale,
   });
 
-  // Headless env init mirrors browser defaults; gentle bumps at inoculation sites (see `initial-inoculation`).
+  // Canonical init: by default, run headless in multi-origin mode (3 sites) with non-conservative bumps.
+  // For strict culture-dish comparability, use the browser with `?culture=1` (conservative bumps).
   const env = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
-  env.fill(INITIAL_ENV_ENERGY_PER_CELL);
-  addRegionalEnvBumps(env, DEFAULT_TRICLADE_SITES, 1.0, 14);
-  ruleEval.setEnvEnergy(env);
-  ruleEval.snapClosedEnergyBudgetFromWorld();
-
-  // Three spatially separated protos, same genome, distinct lineage tags — structural multi-origin.
-  const tape = createProtoTape();
-  spawnTricladProtos(world, organisms, ruleEval, tape, args.spawnEnergy, DEFAULT_TRICLADE_SITES);
+  initSimulation(world, organisms, ruleEval, {
+    env,
+    spawnEnergy: args.spawnEnergy,
+    culture: false,
+    multiOrigin: true,
+  });
 
   const startedAt = new Date().toISOString();
   const runId = `run-${startedAt.replace(/[:.]/g, '-')}-seed-${getRandomSeed()}`;

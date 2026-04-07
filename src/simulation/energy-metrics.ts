@@ -1,6 +1,9 @@
 /**
  * Full-grid energy bookkeeping (English identifiers / logs).
- * Gray–Scott u is open-system (feed term) — totals are not expected to match INITIAL_TOTAL_ENERGY.
+ *
+ * Note: this project uses a **closed** energy budget enforced by `RuleEvaluator.enforceClosedEnergyBudget()`:
+ * `sum(envEnergy) + Σ(cellEnergy) + Σ(stomach) == ecosystemEnergyBudget` (within float noise),
+ * except when explicit inject/spawn bookkeeping changes the budget.
  */
 
 import { TOTAL_CELLS } from './constants';

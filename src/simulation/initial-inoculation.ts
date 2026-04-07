@@ -38,7 +38,12 @@ function clampSpawnCoord(v: number, max: number): number {
 
 /**
  * Small regional env bumps at inoculation sites so multi-origin runs are not trivially energy-starved
- * relative to a single central colony (closed budget; sum increases slightly).
+ * relative to a single central colony.
+ *
+ * This is **non-conservative** with respect to `sum(env)` (it increases total environmental energy).
+ * Closed-budget runs can still be consistent if you treat this as an intended **energy injection** and
+ * then call `RuleEvaluator.setEnvEnergy` + `snapClosedEnergyBudgetFromWorld` (or otherwise account for
+ * the new total) before ticking.
  */
 export function addRegionalEnvBumps(
   env: Float32Array,

@@ -10,9 +10,15 @@ export interface RuntimeConfig {
   spawnInitialEnergy: number;
   metabolicScale: number;
   distressFireChanceScale: number;
-  /** Match headless / design-gate: three separated protos, same genome, distinct lineage tags. */
+  /**
+   * Inoculation mode: when true, spawn multiple separated protos (triclad).
+   * In the browser, you can reproduce headless-like init with `?culture=0&multiOrigin=1`.
+   */
   multiOrigin: boolean;
-  /** Culture dish mode: conservative nutrient hotspots in environment (total env energy preserved). */
+  /**
+   * Culture dish mode: add nutrient hotspots **conservatively** (total `sum(env)` preserved).
+   * Note: culture currently implies triclad inoculation sites as well (see `initSimulation`).
+   */
   culture: boolean;
 }
 

@@ -3,7 +3,7 @@ import { createBuffers, writeUniform } from './gpu/buffers';
 import { createRenderPipeline } from './gpu/pipelines/render';
 import { World } from './simulation/world';
 import { OrganismManager } from './simulation/organism';
-import { ActionOpcode, createProtoTape } from './simulation/tape';
+import { ActionOpcode } from './simulation/tape';
 import { RuleEvaluator } from './simulation/rule-evaluator';
 import { buildAIHandoffMarkdown, buildAIHandoffPrompt, type AIHandoffPromptPreset } from './simulation/ai-handoff';
 import { createUI, updateStats, type UIState } from './ui/controls';
@@ -22,12 +22,7 @@ import {
 import { setRandomSeed, getRandomSeed } from './simulation/rng';
 import { readRuntimeConfigFromUrl } from './simulation/runtime-config';
 import { snapshotAndResetTelemetry, snapshotTelemetry } from './simulation/telemetry';
-import {
-  addRegionalEnvBumps,
-  addRegionalEnvBumpsConservative,
-  spawnTricladProtos,
-  DEFAULT_TRICLADE_SITES,
-} from './simulation/initial-inoculation';
+import { initSimulation } from './simulation/init-simulation';
 
 /** Full-grid `measurePopulationMetrics` only every N sim ticks — halves CPU vs chart+logs at speed 1. */
 const CHART_SAMPLE_EVERY_SIM_TICK = 2;
@@ -70,15 +65,15 @@ async function main() {
     metabolicScale: cfg.metabolicScale,
     distressFireChanceScale: cfg.distressFireChanceScale,
   });
-  if (cfg.culture) {
-    // Culture dish mode: nutrient spots with fixed total env energy.
-    addRegionalEnvBumpsConservative(buffers.initialEnv, DEFAULT_TRICLADE_SITES, 1.0, 14);
-    gpu.device.queue.writeBuffer(buffers.envEnergy[0], 0, buffers.initialEnv.buffer);
-  } else if (cfg.multiOrigin) {
-    addRegionalEnvBumps(buffers.initialEnv, DEFAULT_TRICLADE_SITES, 1.0, 14);
-    gpu.device.queue.writeBuffer(buffers.envEnergy[0], 0, buffers.initialEnv.buffer);
-  }
-  ruleEval.setEnvEnergy(buffers.initialEnv);
+
+  // Canonical init: env field + (culture/multiOrigin) shaping + inoculation.
+  initSimulation(world, organisms, ruleEval, {
+    env: buffers.initialEnv,
+    spawnEnergy: cfg.spawnInitialEnergy,
+    culture: cfg.culture,
+    multiOrigin: cfg.multiOrigin,
+  });
+  gpu.device.queue.writeBuffer(buffers.envEnergy[0], 0, buffers.initialEnv.buffer);
   const stats = new StatsTracker();
   const ui = createUI(canvas, cfg.seed);
   const chartCanvas = document.getElementById('ecology-chart') as HTMLCanvasElement | null;
@@ -128,11 +123,7 @@ async function main() {
     }
   });
 
-  ruleEval.snapClosedEnergyBudgetFromWorld();
-
-  if (cfg.multiOrigin || cfg.culture) {
-    spawnTricladProtos(world, organisms, ruleEval, createProtoTape(), cfg.spawnInitialEnergy, DEFAULT_TRICLADE_SITES);
-  }
+  // Budget was snapped inside initSimulation (before inoculation withdraw/spawn).
 
   let tick = 0;
   let frameCount = 0;

@@ -1,4 +1,4 @@
-import { INITIAL_ENV_ENERGY_PER_CELL, GRID_HEIGHT, GRID_WIDTH } from '../simulation/constants';
+import { GRID_HEIGHT, GRID_WIDTH } from '../simulation/constants';
 import { World } from '../simulation/world';
 import { OrganismManager } from '../simulation/organism';
 import { RuleEvaluator } from '../simulation/rule-evaluator';
@@ -6,7 +6,7 @@ import { CONDITIONS_OFFSET, RULE_SIZE, createProtoTape } from '../simulation/tap
 import { setRandomSeed } from '../simulation/rng';
 import { measureEnergyBookkeeping } from '../simulation/energy-metrics';
 import { snapshotAndResetTelemetry } from '../simulation/telemetry';
-import { addRegionalEnvBumps, spawnTricladProtos, DEFAULT_TRICLADE_SITES } from '../simulation/initial-inoculation';
+import { initSimulation } from '../simulation/init-simulation';
 
 interface Profile {
   moveThr: number;
@@ -49,15 +49,15 @@ function runScenario(seed: number, ticks: number, profile: Profile): { occupiedA
     distressFireChanceScale: 0.3,
   });
 
-  const env = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
-  env.fill(INITIAL_ENV_ENERGY_PER_CELL);
-  addRegionalEnvBumps(env, DEFAULT_TRICLADE_SITES, 1.0, 14);
-  ruleEval.setEnvEnergy(env);
-  ruleEval.snapClosedEnergyBudgetFromWorld();
-
   const spawnEnergy = 150;
   const tape = withProfileTape(profile);
-  spawnTricladProtos(world, organisms, ruleEval, tape, spawnEnergy, DEFAULT_TRICLADE_SITES);
+  initSimulation(world, organisms, ruleEval, {
+    env: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
+    spawnEnergy,
+    culture: false,
+    multiOrigin: true,
+    protoTape: tape,
+  });
 
   let occupiedAt20 = 0;
   for (let t = 1; t <= ticks; t++) {
