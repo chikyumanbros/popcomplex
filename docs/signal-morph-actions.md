@@ -2,6 +2,12 @@
 
 Opcode dispatch lives in [`src/simulation/behaviors/action-dispatch.ts`](../src/simulation/behaviors/action-dispatch.ts). Neural **FIRE** (refractory gate in packed `cellData`) is implemented by `RuleEvaluator.actionFire` in [`rule-evaluator.ts`](../src/simulation/rule-evaluator.ts).
 
+## Related implementation files (quick links)
+
+- `src/simulation/behaviors/action-dispatch.ts` — opcode → marker/feedback wiring (table below)
+- `src/simulation/rule-evaluator.ts` — `actionFire`, distress-trigger FIRE path, and `propagateSignals`
+- `src/simulation/tape.ts` — opcode enum (`ActionOpcode`) and tape layout constants
+
 ## Marker bumps (`bumpMarker` via dispatch)
 
 | Opcode | Marker slot | Notes |

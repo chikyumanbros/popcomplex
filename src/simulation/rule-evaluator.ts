@@ -906,7 +906,7 @@ export class RuleEvaluator {
 
   /**
    * Add non-negative stomach inflow; overflow spills to this cell’s env (preserves closed energy budget).
-   * Call-site map (env / prey → stomach): see [`behaviors/stomach-env-lane.ts`](behaviors/stomach-env-lane.ts).
+   * Call-site map (env / prey → stomach): see [`behaviors/stomach-env-lane.ts`](./behaviors/stomach-env-lane.ts).
    */
   private stomachInflow(idx: number, amount: number) {
     if (amount < 1e-8) return;

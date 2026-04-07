@@ -25,6 +25,15 @@ npm run dev
 
 Open the URL Vite prints (usually `http://localhost:5173`).
 
+## In-app controls (quick)
+
+- **Space**: pause / resume
+- **Step / Speed**: advance simulation deterministically or faster
+- **V**: cycle field visualization modes
+- **H**: toggle connected-component highlight
+- **Shift + click**: inspect a cell (shows organism/tape stats)
+- **Copy AI handoff**: copies a full snapshot report **plus** a ready-to-paste AI prompt (select preset: review/ecology/tape)
+
 Production build:
 
 ```bash
@@ -62,6 +71,7 @@ When tuning ecology parameters, decide adoption by the same protocol every time:
      - `birthRepro`, `birthSplit`, `splitEvents`
      - `occupied`, `orgs`, `simpson`, `lineages`
      - (optional ecology) `shannonNats`, `pielouEven`, `giniLineage`, `meanCellsPerOrg`
+     - (optional tape health) `invOpc_p50`, `invOpc_p90`, `invOpc_mean`, `invOpc_corr_age`, `invOpc_corr_cells`, `invOpc_corr_energy`
    - Prefer changes that reduce split dominance (`birthSplit / max(1,birthRepro)`) while preserving long-horizon survival (`occupied > 0` at target tick).
 
 Example medium-horizon A/B command (single seed):
@@ -90,6 +100,15 @@ Browser query options (examples):
 - `?culture=1` — conservative nutrient hotspots (culture-dish mode; total env energy preserved).
 - `?culture=0&multiOrigin=1` — headless-like multi-origin without conservative rescale (env total increases at init).
 - `?culture=0&multiOrigin=0` — single-origin baseline (one proto at center, no inoculation bumps).
+
+Other query params (all optional; defaults shown):
+
+- `?seed=21719667` — unsigned 32-bit seed (reloads apply it).
+- `?budget=local|global` — energy-budget bookkeeping mode (default: `local`).
+- `?suppression=on|off` — suppression toggle (default: `on`).
+- `?spawnEnergy=60` — initial spawn energy scalar (default: `60`).
+- `?metabolicScale=1` — global metabolic multiplier (default: `1`).
+- `?distressScale=1` — distress FIRE chance scale (default: `1`).
 
 **Spatial topology**: the simulation uses **Moore (8-neighbor)** adjacency everywhere (rules, diffusion, connectivity, MOVE, EAT sampling, etc.). There is no separate 4-neighbor mode or `?neighbor=` switch.
 

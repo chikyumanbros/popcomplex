@@ -135,6 +135,18 @@ Digestion module corruption: if `Tape.isDigestModuleIntact()` is false, `digestP
 
 ---
 
+## 4.1) Observability: invalid opcodes (“dead rules”)
+
+Rule table opcode bytes can corrupt; invalid/unknown opcodes are normalized to `NOP` for safe evaluation.  
+High invalid-opcode rates are not automatically “bad” (they can act like neutral drift / exploration), but you should check whether they correlate with fitness proxies.
+
+Two built-in places to observe this:
+
+- **AI handoff report** (`Copy AI handoff` button): prints `invalidOpcode` distribution plus simple **Pearson correlations** vs age/size/biomass densities (snapshot-only).
+- **Headless experiment CSV** (`npm run experiment:run`): `runs/*/metrics.csv` includes `invOpc_p50/p90/p99/mean` and `invOpc_corr_*` columns for tick-by-tick tracking.
+
+---
+
 ## 5) Rule Table: Scan Order and Chain Flag
 
 - **Scan order**: For each cell, rules are visited in a **rotated** order: start index = `(simTick + cellIdx + orgId) % ruleCount`, then wrap through all rules once. Not always row `0` first.
@@ -146,9 +158,12 @@ Digestion module corruption: if `Tape.isDigestModuleIntact()` is false, `digestP
 ## Reference Files
 
 - `src/simulation/tape.ts`
+- `src/simulation/tape-health.ts` — invalid opcode counting, wear level helpers
 - `src/simulation/metabolic-edge.ts` — morph match thresholds, `foreignAbsorbInteraction`, `canPassiveIntakeFromEnv`, `allowsForeignKinGive`, `foreignKinCooperationEdgeOpen`
 - `src/simulation/neural-network.ts`
 - `src/simulation/organism.ts`
 - `src/simulation/rule-evaluator.ts`
 - `src/simulation/world.ts`
+- `src/simulation/ai-handoff.ts` — AI snapshot report (tape dumps + rule health + correlations)
+- `src/experiments/run-headless.ts` — headless `metrics.csv` producer (`invOpc_*` columns)
 - `README.md`

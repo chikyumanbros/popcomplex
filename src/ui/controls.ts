@@ -130,13 +130,13 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
     <div class="view-mode-banner" title="Press V to cycle — same as top-right header pill">
       <span class="view-mode-banner-label">Field view</span>
       <span class="view-mode-banner-val" id="view-mode-banner-val">Default</span>
-      <span class="view-mode-banner-hint" id="view-mode-banner-hint">1/6 · V next</span>
+      <span class="view-mode-banner-hint" id="view-mode-banner-hint">1/${VIEW_MODE_COUNT} · V next</span>
     </div>
     <div class="stats-panel">
       <div class="stats-kv stats-kv-main"><span class="stat-lbl">Tick</span><span class="stat-val" id="stat-tick"></span></div>
       <div class="stats-kv stats-kv-main"><span class="stat-lbl">Org</span><span class="stat-val" id="stat-org"></span></div>
       <div class="stats-kv stats-kv-main"><span class="stat-lbl">FPS</span><span class="stat-val" id="stat-fps"></span></div>
-      <div class="stats-kv stats-kv-main"><span class="stat-lbl">View</span><span class="stat-val" id="stat-view">Default (1/6)</span></div>
+      <div class="stats-kv stats-kv-main"><span class="stat-lbl">View</span><span class="stat-val" id="stat-view">Default (1/${VIEW_MODE_COUNT})</span></div>
       <div class="stats-kv stats-kv-energy"><span class="stat-lbl">Budget</span><span class="stat-val" id="stat-budget"></span></div>
       <div class="stats-kv stats-kv-energy"><span class="stat-lbl">Meas</span><span class="stat-val" id="stat-meas"></span></div>
       <div class="stats-kv stats-kv-energy"><span class="stat-lbl">Δ</span><span class="stat-val" id="stat-drift"></span></div>
