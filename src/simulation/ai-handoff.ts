@@ -91,7 +91,7 @@ interface OrgProfile {
   nnDominant: MoodIdx;
 }
 
-function summarizeOrganism(world: World, org: Organism, neighborMode: 'four' | 'eight'): OrgProfile {
+function summarizeOrganism(world: World, org: Organism): OrgProfile {
   let energy = 0;
   let stomach = 0;
   let morphA = 0;
@@ -129,26 +129,17 @@ function summarizeOrganism(world: World, org: Organism, neighborMode: 'four' | '
     markerSignal += mkSignal;
     markerMove += mkMove;
 
-    if (neighborMode === 'four') {
-      if (x === 0 || !own.has(idx - 1)) boundaryFaces++;
-      if (x === GRID_WIDTH - 1 || !own.has(idx + 1)) boundaryFaces++;
-      if (y === 0 || !own.has(idx - GRID_WIDTH)) boundaryFaces++;
-      if (y === GRID_HEIGHT - 1 || !own.has(idx + GRID_WIDTH)) boundaryFaces++;
-    } else {
-      // 8-neighbor boundary: count missing neighbors among the Moore neighborhood.
-      // This makes the boundary metric comparable across neighbor modes (normalized by 8*n below).
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) {
-            boundaryFaces++;
-            continue;
-          }
-          const nIdx = ny * GRID_WIDTH + nx;
-          if (!own.has(nIdx)) boundaryFaces++;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) {
+          boundaryFaces++;
+          continue;
         }
+        const nIdx = ny * GRID_WIDTH + nx;
+        if (!own.has(nIdx)) boundaryFaces++;
       }
     }
   }
@@ -173,7 +164,7 @@ function summarizeOrganism(world: World, org: Organism, neighborMode: 'four' | '
     morphA,
     morphB,
     meanMarkers: [markerEat / n, markerDigest / n, markerSignal / n, markerMove / n],
-    boundaryRatio: boundaryFaces / ((neighborMode === 'four' ? 4 : 8) * n),
+    boundaryRatio: boundaryFaces / (8 * n),
     compactness: own.size / (bboxW * bboxH),
     centerX: cx / n,
     centerY: cy / n,
@@ -221,7 +212,6 @@ export function buildAIHandoffPrompt(preset: AIHandoffPromptPreset): string {
 export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   const { tick, world, organisms, ruleEval, ui, bookkeepingSnapshot, telemetrySnapshot } = input;
   const orgList = [...organisms.organisms.values()].sort((a, b) => b.cells.size - a.cells.size);
-  const neighborMode = ruleEval.getNeighborMode();
 
   let orgRegistryCells = 0;
   for (const org of orgList) orgRegistryCells += org.cells.size;
@@ -290,7 +280,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   lines.push(`- **proto NN seed (fixed starter)**: 0x${PROTO_TAPE_NN_SEED.toString(16)}`);
   lines.push('');
 
-  const profiles = orgList.map((org) => summarizeOrganism(world, org, neighborMode));
+  const profiles = orgList.map((org) => summarizeOrganism(world, org));
   const moodOrgCounts = [0, 0, 0, 0];
   const moodCellCounts = [0, 0, 0, 0];
   for (const p of profiles) {
@@ -342,14 +332,14 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   lines.push(
     '### Physics / tuning (intended behaviour; verify in `rule-evaluator.ts`; cross-lineage edge policy in `metabolic-edge.ts`)',
   );
-  lines.push('- Metabolic: `BASE_METABOLIC` + `CROWD_METABOLIC * sqrt(N)` × dominance multiplier when org share > ~8% of live cells, then × isolation multiplier (`1 + ISOLATION_METABOLIC_PENALTY * (1 - sameOrthNeighbors/4)`).');
+  lines.push('- Metabolic: `BASE_METABOLIC` + `CROWD_METABOLIC * sqrt(N)` × dominance multiplier when org share > ~8% of live cells, then × isolation multiplier (`1 + ISOLATION_METABOLIC_PENALTY * (1 - sameMooreNeighbors/8)`).');
   lines.push('- **Per-organism overhead**: each lineage pays a fixed energy/tick from its biomass → env (1-cell pays same as big colony per lineage → selection vs fragment spam).');
   lines.push('- Reproduce: `MIN_CELLS_TO_REPRODUCE=2`, cooldown ~40 ticks, dominance fail + **global crowding fail** when organism count is high.');
   lines.push('- Split policy: disconnected **1-cell shards stay with parent lineage** (no new lineage spawn); multi-cell fragments split into child lineages with extra reproduce cooldown (and additional crowd-scaled cooldown when lineage count is high). At high lineage counts, minimum split-child fragment size is raised (2 → 3 cells) to reduce tiny split spam.');
   lines.push('- Dissolution of e≤0 cells speeds up when many organisms exist; slightly faster for single-cell lineages.');
   lines.push('- Env: **conservative diffusion** on `envEnergy` (`ENV_DIFFUSION_RATE`); each tick ends with **rescale** so `sum(env)+Σcells+Σstomach = ecosystemEnergyBudget` (fixed universe except inject).');
   lines.push('- **Digestion (design notes)**');
-  lines.push('  - **Single pipeline**: All stomach→cell transfer runs in `digestPhase()` once per tick (`PASSIVE_DIGEST_RATE`, `enzymeEff = min(1, cellE/3)`, `networkMul = DIGEST_NETWORK_BASE + DIGEST_NETWORK_COEFF * (sameOrthNeighbors/4)`, heat `DIGESTION_HEAT_LOSS` → env). No second hidden path.');
+  lines.push('  - **Single pipeline**: All stomach→cell transfer runs in `digestPhase()` once per tick (`PASSIVE_DIGEST_RATE`, `enzymeEff = min(1, cellE/3)`, `networkMul = DIGEST_NETWORK_BASE + DIGEST_NETWORK_COEFF * (sameMooreNeighbors/8)`, heat `DIGESTION_HEAT_LOSS` → env). No second hidden path.');
   lines.push('  - **`DIGEST` opcode**: Does not move energy immediately; it only raises `digestRuleBoost[idx]` (capped by `DIGEST_RULE_BOOST_CAP`). That boost multiplies the same `digestPhase` formula for that cell. **Neighbor stomachs are never read** (removed the old “strip adjacent same-org stomach” behaviour).');
   lines.push('  - **Conservation**: Digestion only moves mass own-stomach → own-cell-energy + local env heat; consistent with closed `ecosystemEnergyBudget`.');
   lines.push('  - **Rule-order nuance**: The **final boost multiplier** is order-independent (running sum clamped to cap). **Which** `DIGEST` rows still pay `ACTION_COST_DIGEST` if the cap is already full depends on rule-table order (later rows may no-op with `false`). Avoid redundant duplicate `DIGEST` rules on one cell.');
@@ -372,7 +362,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   );
   lines.push('- **REPAIR (0x0C)**: immune action — weighted mend of `degradation` + clamp invalid rule opcodes to NOP; success rate × `(1 + k × quorum)` where quorum = same-org neighbors (full) + foreign neighbors weighted by multi-factor kin trust (**public** kin tag + signal marker + morph A — face-only mimicry stays weak; private genetic tag is not used).');
   lines.push('- **ABSORB (0x07)**: heterospecific contact is a **single continuous interaction**: morph affinity continuously shifts between (A) symmetric relax (cell↔cell equalization) and (B) stomach inflow (neighbor cell energy → actor stomach). JAM acts like **immunity** that dampens both good+bad coupling; large connected groups amplify both immunity and breaking. Low-rate horizontal rule-opcode transfer can occur at the interface (`donor -> host`); fixation is a deterministic contest of contact-drive (foreign-contact pressure + stomach load + interface flux + kin trust) vs local REPAIR quorum defense, with a small heat fee on successful integration.');
-  lines.push('- **Social consensus (signal gossip)**: each tick, same-org orthogonal neighbors softly pull a cell’s signal marker toward local mean (local averaging), producing agreement/dissent dynamics from topology without explicit role flags.');
+  lines.push('- **Social consensus (signal gossip)**: each tick, same-org Moore neighbors softly pull a cell’s signal marker toward local mean (local averaging), producing agreement/dissent dynamics from topology without explicit role flags.');
   lines.push('- **Consensus-coupled maintenance**: higher local signal cohesion slightly boosts REPAIR success, linking social agreement to collective maintenance outcomes.');
   lines.push('- **GIVE (0x04)**: same-org redistribution unchanged; may also push energy to **foreign** cells when kin trust is high enough, with extra heat loss scaling with imperfect trust (parasitic “fake kin” if **public** face + signal + morph align; private genetic tag not used).');
   lines.push('- **Deterministic decay (rot)**: cells with `energy <= 0` accumulate a deterministic `rot` gauge; large connected components slow rot, harsher metabolism speeds it. Cells dissolve when `rot >= 1` (see `cleanup-phase.ts`).');

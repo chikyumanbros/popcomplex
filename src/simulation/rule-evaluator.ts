@@ -18,7 +18,7 @@ import { transcribeForReproductionOutcome } from './transcription';
 import { type World, U32_PER_CELL } from './world';
 import { type Organism, type OrganismManager, NN_OUTPUT, NN_MOVE } from './organism';
 import { randomF32 } from './rng';
-import type { BudgetMode, NeighborMode, SuppressionMode } from './runtime-config';
+import type { BudgetMode, SuppressionMode } from './runtime-config';
 import {
   recordActionExecution,
   recordBirthFromReproduce,
@@ -71,12 +71,6 @@ import {
   foreignKinCooperationEdgeOpen,
 } from './metabolic-edge';
 
-const ORTH_DIRS: [number, number][] = [
-  [0, -1],
-  [1, 0],
-  [0, 1],
-  [-1, 0],
-];
 const EIGHT_DIRS: [number, number][] = [
   [0, -1],
   [1, 0],
@@ -99,7 +93,7 @@ function popcount24(v: number): number {
 }
 
 // Tape REPAIR (immune): same-org neighbor quorum boosts success (collective error correction bias)
-const REPAIR_NEIGHBOR_COEFF = 0.16; // success mult += coeff * sameOrthogonalNeighbors (0..4)
+const REPAIR_NEIGHBOR_COEFF = 0.16; // success mult += coeff * weighted neighbor quorum (Moore)
 const REPAIR_BASE_P         = 0.36; // base success before bias × intensity
 // REPAIR is meant to be "life-extending error correction", not instant restoration.
 const REPAIR_DEG_HEAL       = 12;   // degradation subtracted on success (primary byte)
@@ -130,7 +124,7 @@ const LOW_ENERGY_LEAK_MAX     = 0.08;
  * This biases survival toward networked morphologies without adding non-conservative energy.
  */
 const DIGEST_NETWORK_BASE     = 0.82; // same-neighbor ratio 0.0 -> 82% of baseline digest throughput
-const DIGEST_NETWORK_COEFF    = 0.32; // ratio 1.0 (4 same orth-neighbors) -> +32%
+const DIGEST_NETWORK_COEFF    = 0.32; // ratio 1.0 (8 same Moore neighbors) -> +32%
 /**
  * Max extra digest multiplier from DIGEST opcodes this tick per cell (applied in digestPhase only).
  * Neighbor stomachs are not used — avoids order-dependent “parasitic” multi-cell stripping and double-counting
@@ -208,7 +202,6 @@ interface CellCtx {
 }
 
 interface RuleEvaluatorOptions {
-  neighborMode?: NeighborMode;
   budgetMode?: BudgetMode;
   suppressionMode?: SuppressionMode;
   metabolicScale?: number;
@@ -238,7 +231,6 @@ export class RuleEvaluator {
   /** Total occupied cells at start of rule phase (before MOVE/REPRO etc.). Used for dominance-gated reproduction. */
   private dominanceLiveCellCount = 1;
   private simTick = 0;
-  private neighborMode: NeighborMode;
   private budgetMode: BudgetMode;
   private suppressionMode: SuppressionMode;
   private metabolicScale: number;
@@ -259,7 +251,6 @@ export class RuleEvaluator {
     this.envEnergy = new Float32Array(TOTAL_CELLS);
     this.envScratch = new Float32Array(TOTAL_CELLS);
     this.digestRuleBoost = new Float32Array(TOTAL_CELLS);
-    this.neighborMode = opts.neighborMode ?? 'four';
     this.budgetMode = opts.budgetMode ?? 'local';
     this.suppressionMode = opts.suppressionMode ?? 'on';
     this.metabolicScale = opts.metabolicScale ?? 1;
@@ -267,16 +258,7 @@ export class RuleEvaluator {
     this.jamTicks = new Uint8Array(TOTAL_CELLS);
   }
 
-  getNeighborMode(): NeighborMode {
-    return this.neighborMode;
-  }
-
   private neighborDirs(): [number, number][] {
-    return this.neighborMode === 'four' ? ORTH_DIRS : EIGHT_DIRS;
-  }
-
-  /** MOVE candidates are always 8-way so diagonal approach stays available even in 4-neighbor ecology mode. */
-  private moveDirs(): [number, number][] {
     return EIGHT_DIRS;
   }
 
@@ -945,11 +927,10 @@ export class RuleEvaluator {
     // No baseline intake at zero vitality; passiveAbsorb covers the "inert soaking" path.
     const maxEat = maxGather * vitality * specBonus * coordination;
     let gathered = 0;
-    const spots: [number, number][] = [
-      [cell.x, cell.y],
-      [cell.x - 1, cell.y], [cell.x + 1, cell.y],
-      [cell.x, cell.y - 1], [cell.x, cell.y + 1],
-    ];
+    const spots: [number, number][] = [[cell.x, cell.y]];
+    for (const [dx, dy] of this.neighborDirs()) {
+      spots.push([cell.x + dx, cell.y + dy]);
+    }
     for (const [px, py] of spots) {
       if (px < 0 || px >= GRID_WIDTH || py < 0 || py >= GRID_HEIGHT) continue;
       const ei = py * GRID_WIDTH + px;
@@ -1088,7 +1069,7 @@ export class RuleEvaluator {
     if (idx >= CONDITIONS_OFFSET && idx < CONDITIONS_OFFSET + MAX_RULES * RULE_SIZE) {
       const repairedRule = Math.floor((idx - CONDITIONS_OFFSET) / RULE_SIZE) & 0xff;
       const [r0, r1, r2] = this.world.getRuleRoutesByIdx(cell.idx);
-      const quorum01 = Math.max(0, Math.min(1, kinSum / 4));
+      const quorum01 = Math.max(0, Math.min(1, kinSum / 8));
       const groupSize = Math.max(1, this.sameOrgConnectedGroupSize(cell.idx, cell.orgId));
       const netStability = Math.max(0, Math.min(1, Math.log2(groupSize) / 6)); // 1..64 => ~0..1
       // High quorum makes rewiring more stable; low quorum jitters more.
@@ -1303,7 +1284,7 @@ export class RuleEvaluator {
     if (org.cells.size === 0) return false;
     let bestDir: [number, number] = [0, 0];
     let bestScore = -Infinity;
-    for (const [dx, dy] of this.moveDirs()) {
+    for (const [dx, dy] of this.neighborDirs()) {
       if (!this.canMoveOrg(org, dx, dy)) continue;
       let score = 0;
       for (const idx of org.cells) {
@@ -1530,7 +1511,6 @@ export class RuleEvaluator {
       },
       GRID_WIDTH,
       GRID_HEIGHT,
-      this.neighborMode === 'eight',
     );
   }
 
@@ -1544,7 +1524,6 @@ export class RuleEvaluator {
       (idx, jamTtl) => this.markJammed(idx, jamTtl),
       GRID_WIDTH,
       GRID_HEIGHT,
-      this.neighborMode === 'eight',
     );
   }
 
@@ -1633,7 +1612,6 @@ export class RuleEvaluator {
       (x, y) => this.world.getOrganismId(x, y),
       GRID_WIDTH,
       GRID_HEIGHT,
-      this.neighborMode === 'eight',
     );
   }
 
@@ -1750,7 +1728,6 @@ export class RuleEvaluator {
         sameOrgConnectedGroupSize: (seedIdx, orgId) => this.sameOrgConnectedGroupSize(seedIdx, orgId),
         gridWidth: GRID_WIDTH,
         gridHeight: GRID_HEIGHT,
-        neighborModeEight: this.neighborMode === 'eight',
       },
       U32_PER_CELL,
     );
@@ -2003,11 +1980,11 @@ export class RuleEvaluator {
     return cnt;
   }
 
-  /** Orthogonal neighbors occupied by a different organism (current world, not hypothetical shift). */
-  private countForeignOrthFacesAtIdx(idx: number, orgId: number): number {
+  /** Moore neighbors occupied by a different organism (current world, not hypothetical shift). */
+  private countForeignMooreNeighborsAtIdx(idx: number, orgId: number): number {
     const x = idx % GRID_WIDTH, y = (idx - x) / GRID_WIDTH;
     let n = 0;
-    for (const [odx, ody] of ORTH_DIRS) {
+    for (const [odx, ody] of EIGHT_DIRS) {
       const nx = x + odx, ny = y + ody;
       if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
       const no = this.world.getOrganismId(nx, ny);
@@ -2017,7 +1994,7 @@ export class RuleEvaluator {
   }
 
   /**
-   * After rigidly shifting the whole organism by (dx,dy): count (1) orthogonal faces touching another org,
+   * After rigidly shifting the whole organism by (dx,dy): count (1) Moore-neighborhood faces touching another org,
    * (2) faces on the map boundary. Empty neighbors are neutral so foraging into open space is not penalized.
    */
   private countRepulsionFacesIfOrgShifted(
@@ -2037,9 +2014,9 @@ export class RuleEvaluator {
     );
   }
 
-  /** Per tick: move cell energy to env proportional to orthogonal heterospecific faces. Intentionally not gated by JAM (ambient leak vs morph symbiosis in `foreignAbsorbInteraction`). */
+  /** Per tick: move cell energy to env proportional to heterospecific Moore neighbors. Intentionally not gated by JAM (ambient leak vs morph symbiosis in `foreignAbsorbInteraction`). */
   private applyForeignInterfaceMetabolism(idx: number, orgId: number) {
-    const faces = this.countForeignOrthFacesAtIdx(idx, orgId);
+    const faces = this.countForeignMooreNeighborsAtIdx(idx, orgId);
     if (faces <= 0) return;
     const e = this.world.getCellEnergyByIdx(idx);
     const tax = Math.min(Math.max(0, e - 1e-6), faces * FOREIGN_INTERFACE_METABOLISM);

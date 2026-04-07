@@ -1,9 +1,3 @@
-const ORTH_DIRS: [number, number][] = [
-  [0, -1],
-  [1, 0],
-  [0, 1],
-  [-1, 0],
-];
 const EIGHT_DIRS: [number, number][] = [
   [0, -1],
   [1, 0],
@@ -29,9 +23,7 @@ export function spillStomachToNearbyEnv(
   addEnvEnergyAtIdx: (idx: number, delta: number) => void,
   gridWidth: number,
   gridHeight: number,
-  useEightNeighbors = false,
 ): boolean {
-  const dirs = useEightNeighbors ? EIGHT_DIRS : ORTH_DIRS;
   const stomach = getStomachByIdx(cell.idx);
   const spill = Math.min(stomach, Math.max(0, amount));
   if (spill < 0.01) return false;
@@ -42,7 +34,7 @@ export function spillStomachToNearbyEnv(
   addEnvEnergyAtIdx(cell.idx, selfShare);
 
   const neighbors: number[] = [];
-  for (const [dx, dy] of dirs) {
+  for (const [dx, dy] of EIGHT_DIRS) {
     const nx = cell.x + dx;
     const ny = cell.y + dy;
     if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;

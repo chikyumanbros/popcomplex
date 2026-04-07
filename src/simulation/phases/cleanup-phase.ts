@@ -14,7 +14,6 @@ export interface CleanupPhaseDeps {
   sameOrgConnectedGroupSize: (seedIdx: number, orgId: number) => number;
   gridWidth: number;
   gridHeight: number;
-  neighborModeEight: boolean;
 }
 
 export function cleanupDeadOrganismsPhase(d: CleanupPhaseDeps, u32PerCell: number) {

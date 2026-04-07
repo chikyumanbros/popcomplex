@@ -98,7 +98,7 @@ function testSpillLocalRedistribution() {
   assert.ok(stomachAfter < 1.0, 'SPILL must consume own stomach');
   assert.ok((evaluator as any).envEnergy[idx] > 0, 'SPILL must add energy at self cell');
   const northIdx = idxOf(x, y - 1);
-  assert.ok((evaluator as any).envEnergy[northIdx] > 0, 'SPILL must distribute some energy to orthogonal neighbors');
+  assert.ok((evaluator as any).envEnergy[northIdx] > 0, 'SPILL must distribute some energy to Moore neighbors');
 }
 
 function testJamBlocksCrossLineageTransferAndAbsorbCoupling() {
@@ -126,10 +126,11 @@ function testJamBlocksCrossLineageTransferAndAbsorbCoupling() {
   world.setCell(hx, hy, hostId, CellType.Stem, 6, 0x123456);
   world.setCell(dx, dy, donorId, CellType.Stem, 8, 0x123456);
   world.setStomachByIdx(hostIdx, 10);
+  // Mismatch morphs so ABSORB has a non-zero steal (stomach) component; matched morphs are almost all relax.
   world.setMorphogenA(hostIdx, 2);
   world.setMorphogenB(hostIdx, 2);
-  world.setMorphogenA(donorIdx, 2);
-  world.setMorphogenB(donorIdx, 2);
+  world.setMorphogenA(donorIdx, 6);
+  world.setMorphogenB(donorIdx, 6);
   organisms.get(hostId)!.cells.add(hostIdx);
   organisms.get(donorId)!.cells.add(donorIdx);
 

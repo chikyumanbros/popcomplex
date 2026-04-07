@@ -15,7 +15,7 @@ export function computeJamStrengthOnEdge(jamTicks: Uint8Array, aIdx: number, bId
 
 /**
  * Same-org connected component size around `seedIdx`, bounded by `cap`.
- * `dirs` should be orthogonal or 8-neighbor deltas (caller decides neighbor mode).
+ * `dirs` should be Moore (8-neighbor) deltas; connectivity matches `RuleEvaluator.neighborDirs()`.
  */
 export function sameOrgConnectedGroupSize(
   world: World,

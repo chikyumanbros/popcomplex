@@ -27,7 +27,7 @@ The implementation style prioritizes quick run-observe-adjust loops over rigid u
 | `applyReadDegradation` | Natural read-side wear progression; low energy and old age increase break probability. |
 | `applyActionWear` | Adds usage wear around actively executed rule bytes. |
 | `normalizeActionOpcode` | Maps corrupt/unknown opcode bytes to `NOP` for safe evaluation. |
-| `SPILL` | Low-intensity action opcode that redistributes own stomach to local environment (self + orthogonal neighbors). |
+| `SPILL` | Low-intensity action opcode that redistributes own stomach to local environment (self + **Moore / 8-neighbor** tiles). |
 | `JAM` | Defensive action opcode that temporarily cuts cross-lineage boundary coupling near the acting cell. |
 | `tapeSnapshotBase64` | Snapshot format for the full 512 bytes (`data + degradation`) as base64. |
 
@@ -91,8 +91,8 @@ Outputs form a probability distribution; argmax is stored as `nnDominant` and re
 
 ### A. Morphological Network (Spatial Graph)
 
-- Each organism is a set of occupied cells, interacting through local neighborhoods (4-neighbor or 8-neighbor mode).
-- Boundary checks, same/foreign contact counts, and empty-neighbor counts are all local-topology derived.
+- Each organism is a set of occupied cells, interacting through a **Moore (8-neighbor)** neighborhood on the grid (single topology; no 4-neighbor mode).
+- Boundary checks, same/foreign contact counts, and empty-neighbor counts are all local-topology derived from that neighborhood.
 - Digestion efficiency is multiplied by same-org connectivity, so isolated cells are structurally disadvantaged.
 
 ### B. Neural-like Signal Propagation
@@ -100,14 +100,14 @@ Outputs form a probability distribution; argmax is stored as `nnDominant` and re
 `propagateSignals()` drives same-organism signal spread:
 
 - `neuralState = 0`: idle
-- `neuralState = 1`: firing (will propagate to neighbors)
+- `neuralState = 1`: firing (will propagate to **same-org Moore neighbors**)
 - `neuralState = 2`: refractory
 
 Refractory duration comes from tape (`refractoryPeriod`, low nibble of byte `32`).
 
 ### C. Social Consensus Drift (Local Synchronization)
 
-`applySocialConsensusDrift()` softly pulls each cell's signal marker toward the local same-organism neighborhood mean.  
+`applySocialConsensusDrift()` softly pulls each cell's signal marker toward the local same-organism **Moore-neighborhood** mean.  
 This creates agreement-like dynamics from topology and local interaction, without a centralized controller.
 
 ### D. Runtime Responsibility Split
@@ -126,7 +126,7 @@ These are **implementation-true** laws for reasoning about transfers (see `simul
 1. **Closed budget**: Each tick, `sum(envEnergy) + sum(cell energy) + sum(stomach)` matches `ecosystemEnergyBudget` after enforcement.
 2. **Environment → organism intake**: Flow from `envEnergy` into the organism goes through **`stomachInflow`** (passive absorb + `EAT`). No direct `env → cellEnergy` shortcut.
 3. **Stomach → cell gate**: Net movement from stomach buffer into cell energy runs in **`digestPhase()`** only. The **`DIGEST` opcode** only raises per-cell `digestRuleBoost` consumed there; it does not immediately move energy.
-4. **Direct cell↔cell**: Same-organism `GIVE` / `TAKE` move **cell energy** between neighbors. Xenogeneic direct paths exist only where the evaluator allows them (e.g. kin-trust `GIVE`); predation steal paths use **actor stomach** (`stomachInflow`).
+4. **Direct cell↔cell**: Same-organism `GIVE` / `TAKE` move **cell energy** between **Moore-adjacent** cells. Xenogeneic direct paths exist only where the evaluator allows them (e.g. kin-trust `GIVE`); predation steal paths use **actor stomach** (`stomachInflow`).
 5. **Stomach overflow**: `stomachInflow` clamps to cap; excess returns to **local `envEnergy`** (closed budget).
 
 Digestion module corruption: if `Tape.isDigestModuleIntact()` is false, `digestPhase` skips that organism’s cells, but EAT/passive intake can still fill stomach (converter off, buffer may fill).

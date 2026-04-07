@@ -27,10 +27,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var neighborSum: f32 = 0.0;
   var count: f32 = 0.0;
 
-  if (x > 0u)            { neighborSum += envIn[idx(x - 1u, y)]; count += 1.0; }
-  if (x < u.width - 1u)  { neighborSum += envIn[idx(x + 1u, y)]; count += 1.0; }
-  if (y > 0u)            { neighborSum += envIn[idx(x, y - 1u)]; count += 1.0; }
-  if (y < u.height - 1u) { neighborSum += envIn[idx(x, y + 1u)]; count += 1.0; }
+  for (var dy: i32 = -1; dy <= 1; dy++) {
+    for (var dx: i32 = -1; dx <= 1; dx++) {
+      if (dx == 0 && dy == 0) { continue; }
+      let nx = i32(x) + dx;
+      let ny = i32(y) + dy;
+      if (nx < 0 || ny < 0 || nx >= i32(u.width) || ny >= i32(u.height)) { continue; }
+      neighborSum += envIn[idx(u32(nx), u32(ny))];
+      count += 1.0;
+    }
+  }
 
   let avg = neighborSum / count;
   let diff = (avg - center) * DIFFUSION_RATE;

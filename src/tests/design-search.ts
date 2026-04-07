@@ -43,7 +43,6 @@ function runScenario(seed: number, ticks: number, profile: Profile): { occupiedA
   const world = new World();
   const organisms = new OrganismManager();
   const ruleEval = new RuleEvaluator(world, organisms, {
-    neighborMode: 'four',
     budgetMode: 'local',
     suppressionMode: 'on',
     metabolicScale: 0.6,

@@ -3,7 +3,7 @@ export const GRID_HEIGHT = 256;
 export const TOTAL_CELLS = GRID_WIDTH * GRID_HEIGHT;
 
 /** Uniform initial env fill: per-cell average before first tick (lower = scarcer closed universe). */
-export const INITIAL_ENV_ENERGY_PER_CELL = 4;
+export const INITIAL_ENV_ENERGY_PER_CELL = 2;
 export const INITIAL_TOTAL_ENERGY = TOTAL_CELLS * INITIAL_ENV_ENERGY_PER_CELL;
 
 /** Conservative env mixing (closed system: sum(env)+Σcells+Σstomach held fixed except inject/spawn bookkeeping). */

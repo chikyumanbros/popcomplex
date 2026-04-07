@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 interface RunConfig {
   runId: string;
   seed: number;
-  neighbor: string;
+  /** Legacy headless runs included `neighbor`; grouping defaults to eight when absent. */
+  neighbor?: string;
   budget: string;
   suppression: string;
   spawnEnergy?: number;
@@ -74,7 +75,7 @@ function main() {
       const spawnEnergy = cfg.spawnEnergy ?? 60;
       const metabolicScale = cfg.metabolicScale ?? 1;
       const distressScale = cfg.distressScale ?? 1;
-      const key = `${cfg.neighbor}/${cfg.budget}/${cfg.suppression}/spawn${spawnEnergy}/meta${metabolicScale}/distress${distressScale}`;
+      const key = `${cfg.neighbor ?? 'eight'}/${cfg.budget}/${cfg.suppression}/spawn${spawnEnergy}/meta${metabolicScale}/distress${distressScale}`;
       const g = grouped.get(key) ?? { cfg, rows: [] };
       g.rows.push(row);
       grouped.set(key, g);

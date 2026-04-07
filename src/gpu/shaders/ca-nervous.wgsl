@@ -56,12 +56,18 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var newSignal: f32 = 0.0;
 
   if (neuralState == 0u) {
-    // Resting: accumulate input from same-organism neighbors
+    // Resting: accumulate input from same-organism Moore neighbors (matches CPU `propagateSignals`)
     var input: f32 = 0.0;
-    if (x > 0u)            { let nb = cellBase(x - 1u, y); if (getOrgId(nb) == orgId) { input += getSignalOut(nb); } }
-    if (x < u.width - 1u)  { let nb = cellBase(x + 1u, y); if (getOrgId(nb) == orgId) { input += getSignalOut(nb); } }
-    if (y > 0u)            { let nb = cellBase(x, y - 1u); if (getOrgId(nb) == orgId) { input += getSignalOut(nb); } }
-    if (y < u.height - 1u) { let nb = cellBase(x, y + 1u); if (getOrgId(nb) == orgId) { input += getSignalOut(nb); } }
+    for (var dy: i32 = -1; dy <= 1; dy++) {
+      for (var dx: i32 = -1; dx <= 1; dx++) {
+        if (dx == 0 && dy == 0) { continue; }
+        let nx = i32(x) + dx;
+        let ny = i32(y) + dy;
+        if (nx < 0 || ny < 0 || nx >= i32(u.width) || ny >= i32(u.height)) { continue; }
+        let nb = cellBase(u32(nx), u32(ny));
+        if (getOrgId(nb) == orgId) { input += getSignalOut(nb); }
+      }
+    }
 
     if (input > FIRE_THRESHOLD) {
       newNeuralState = 1u; // -> Excited

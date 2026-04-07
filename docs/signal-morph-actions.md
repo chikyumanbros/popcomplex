@@ -22,8 +22,8 @@ Opcode dispatch lives in [`src/simulation/behaviors/action-dispatch.ts`](../src/
 | ABSORB | 2 | `mod` |
 | GIVE / TAKE | 3 | `mod` |
 | DIV | 4 | `mod` |
-| FIRE / SIG | 5 | neighbor env sum scaled |
-| MOVE | 6 | neighbor env sum scaled (capped) |
+| FIRE / SIG | 5 | Moore-neighbor env sum scaled |
+| MOVE | 6 | Moore-neighbor env sum scaled (capped) |
 | REPRODUCE | 7 | energy × fraction scaled (capped) |
 | DIGEST | 1 | `mod` |
 | REPAIR | 1 | repair hint (capped) |

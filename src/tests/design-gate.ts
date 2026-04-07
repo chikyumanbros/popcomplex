@@ -89,7 +89,6 @@ function runScenario(seed: number, ticks: number, metabolicScale: number): RunSu
   const world = new World();
   const organisms = new OrganismManager();
   const ruleEval = new RuleEvaluator(world, organisms, {
-    neighborMode: 'four',
     budgetMode: 'local',
     suppressionMode: 'on',
     metabolicScale,

@@ -1,11 +1,5 @@
 import { CellType } from '../constants';
 
-const ORTH_DIRS: [number, number][] = [
-  [0, -1],
-  [1, 0],
-  [0, 1],
-  [-1, 0],
-];
 const EIGHT_DIRS: [number, number][] = [
   [0, -1],
   [1, 0],
@@ -36,11 +30,9 @@ export function applyJamToForeignBoundary(
   markJammed: (idx: number, jamTtl: number) => void,
   gridWidth: number,
   gridHeight: number,
-  useEightNeighbors = false,
 ): boolean {
-  const dirs = useEightNeighbors ? EIGHT_DIRS : ORTH_DIRS;
   let applied = false;
-  for (const [dx, dy] of dirs) {
+  for (const [dx, dy] of EIGHT_DIRS) {
     const nx = cell.x + dx;
     const ny = cell.y + dy;
     if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;
@@ -76,7 +68,7 @@ export function countRepulsionFacesForShift(
   for (const idx of shifted) {
     const x = idx % gridWidth;
     const y = (idx - x) / gridWidth;
-    for (const [ox, oy] of ORTH_DIRS) {
+    for (const [ox, oy] of EIGHT_DIRS) {
       const nx = x + ox;
       const ny = y + oy;
       if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) {

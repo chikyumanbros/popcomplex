@@ -88,6 +88,8 @@ Browser query options (examples):
 - `?multiOrigin=1` — spawn three initial clades.
 - `?culture=1` — conservative nutrient hotspots (culture-dish mode; total env energy preserved).
 
+**Spatial topology**: the simulation uses **Moore (8-neighbor)** adjacency everywhere (rules, diffusion, connectivity, MOVE, EAT sampling, etc.). There is no separate 4-neighbor mode or `?neighbor=` switch.
+
 ## GPU vs CPU (what actually runs)
 
 | Layer | Role |
@@ -97,8 +99,8 @@ Browser query options (examples):
 
 **Not used in the live loop** (pipelines / shaders exist under `src/gpu/` but `main.ts` does not submit their compute passes):
 
-- `ca-nervous.wgsl` — would step a same-org nervous CA; **duplicates** logic that already runs on CPU. Do not treat it as ground truth unless you reconnect it and remove or sync the CPU path.
-- `cell-update.wgsl`, `env-diffusion.wgsl` — experimental / future stepping.
+- `ca-nervous.wgsl` — would step a same-org nervous CA; **duplicates** logic that already runs on CPU (Moore neighbors when synced). Do not treat it as ground truth unless you reconnect it and remove or sync the CPU path.
+- `cell-update.wgsl`, `env-diffusion.wgsl` — experimental / future stepping (`env-diffusion` uses Moore-averaging when aligned with CPU `stepEnvDiffusion`).
 - `inject-energy.wgsl` — pipeline is created for possible GPU injection; **mouse inject was removed**; CPU writes `envEnergy` directly.
 
 **Single source of truth for neural state**: `World.cellData` packed fields, updated by `RuleEvaluator` (including `propagateSignals`). The render shader only **displays** `neuralState` for visuals.
@@ -142,7 +144,7 @@ Invalid rule opcode bytes are normalized to **NOP** when rules are read (`getRul
 
 Recent low-intensity opcode additions keep the same compatibility rule:
 
-- `SPILL` — spills a small amount of own stomach to local environment (self + orthogonal neighbors).
+- `SPILL` — spills a small amount of own stomach to local environment (self + **Moore / 8-neighbor** env tiles).
 - `JAM` — applies a short-lived defensive boundary jam that cuts cross-lineage coupling routes (e.g. horizontal tape transfer, foreign ABSORB coupling path) near the acting cell.
 
 ### Seed vs initial genome

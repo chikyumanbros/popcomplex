@@ -1,12 +1,10 @@
-export type NeighborMode = 'four' | 'eight';
 export type BudgetMode = 'global' | 'local';
 export type SuppressionMode = 'on' | 'off';
 /** Default URL `seed=` and headless default; design-gate scenarios use this among others. */
-export const DEFAULT_RUNTIME_SEED = 303039276;
+export const DEFAULT_RUNTIME_SEED = 16815819;
 
 export interface RuntimeConfig {
   seed: number;
-  neighborMode: NeighborMode;
   budgetMode: BudgetMode;
   suppressionMode: SuppressionMode;
   spawnInitialEnergy: number;
@@ -16,11 +14,6 @@ export interface RuntimeConfig {
   multiOrigin: boolean;
   /** Culture dish mode: conservative nutrient hotspots in environment (total env energy preserved). */
   culture: boolean;
-}
-
-function parseNeighborMode(v: string | null): NeighborMode {
-  if (v === '8' || v === 'eight') return 'eight';
-  return 'four';
 }
 
 function parseBudgetMode(v: string | null): BudgetMode {
@@ -75,7 +68,6 @@ export function readRuntimeConfigFromUrl(): RuntimeConfig {
 
   return {
     seed,
-    neighborMode: parseNeighborMode(qs.get('neighbor')),
     budgetMode: parseBudgetMode(qs.get('budget')),
     suppressionMode: parseSuppressionMode(qs.get('suppression')),
     spawnInitialEnergy: parsePositiveFinite(qs.get('spawnEnergy'), 60),

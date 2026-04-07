@@ -9,13 +9,12 @@ import { createProtoTape, tapeSnapshotBase64 } from '../simulation/tape';
 import { setRandomSeed, getRandomSeed } from '../simulation/rng';
 import { measureEnergyBookkeeping, measurePopulationMetrics, biomassReservoirTotal } from '../simulation/energy-metrics';
 import { snapshotAndResetTelemetry } from '../simulation/telemetry';
-import type { BudgetMode, NeighborMode, SuppressionMode } from '../simulation/runtime-config';
+import type { BudgetMode, SuppressionMode } from '../simulation/runtime-config';
 
 interface CliArgs {
   seed: number;
   ticks: number;
   logEvery: number;
-  neighbor: NeighborMode;
   budget: BudgetMode;
   suppression: SuppressionMode;
   spawnEnergy: number;
@@ -25,7 +24,7 @@ interface CliArgs {
   outDir: string;
 }
 
-const DEFAULT_SEED = 303039276;
+const DEFAULT_SEED = 16815819;
 
 function parseArgs(): CliArgs {
   const map = new Map<string, string>();
@@ -37,7 +36,6 @@ function parseArgs(): CliArgs {
   const ticksNum = Number(map.get('ticks') ?? 1000);
   const logEveryNum = Number(map.get('logEvery') ?? 10);
   const snapshotEveryNum = Number(map.get('snapshotEvery') ?? 500);
-  const neighbor = (map.get('neighbor') === 'eight' ? 'eight' : 'four') as NeighborMode;
   const budget = (map.get('budget') === 'global' ? 'global' : 'local') as BudgetMode;
   const suppression = (map.get('suppression') === 'off' ? 'off' : 'on') as SuppressionMode;
   const spawnEnergyNum = Number(map.get('spawnEnergy') ?? 60);
@@ -48,7 +46,6 @@ function parseArgs(): CliArgs {
     seed: Number.isFinite(seedNum) ? (Math.trunc(seedNum) >>> 0) : DEFAULT_SEED,
     ticks: Number.isFinite(ticksNum) ? Math.max(1, Math.trunc(ticksNum)) : 1000,
     logEvery: Number.isFinite(logEveryNum) ? Math.max(1, Math.trunc(logEveryNum)) : 10,
-    neighbor,
     budget,
     suppression,
     spawnEnergy: Number.isFinite(spawnEnergyNum) && spawnEnergyNum > 0 ? spawnEnergyNum : 60,
@@ -86,7 +83,6 @@ function main() {
   const world = new World();
   const organisms = new OrganismManager();
   const ruleEval = new RuleEvaluator(world, organisms, {
-    neighborMode: args.neighbor,
     budgetMode: args.budget,
     suppressionMode: args.suppression,
     metabolicScale: args.metabolicScale,
@@ -238,7 +234,6 @@ function main() {
     seed: getRandomSeed(),
     ticks: args.ticks,
     logEvery: args.logEvery,
-    neighbor: args.neighbor,
     budget: args.budget,
     suppression: args.suppression,
     spawnEnergy: args.spawnEnergy,
@@ -255,7 +250,6 @@ function main() {
     '',
     `- seed: ${config.seed}`,
     `- ticks: ${config.ticks}`,
-    `- neighbor: ${config.neighbor}`,
     `- budget: ${config.budget}`,
     `- suppression: ${config.suppression}`,
     `- spawnEnergy: ${config.spawnEnergy}`,

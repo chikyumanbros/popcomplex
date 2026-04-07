@@ -44,7 +44,7 @@ async function main() {
   const cfg = readRuntimeConfigFromUrl();
   setRandomSeed(cfg.seed);
   console.log(
-    `[Run] seed:${getRandomSeed()} neighbor:${cfg.neighborMode} budget:${cfg.budgetMode} suppression:${cfg.suppressionMode} spawnEnergy:${cfg.spawnInitialEnergy} metabolicScale:${cfg.metabolicScale} distressScale:${cfg.distressFireChanceScale} multiOrigin:${cfg.multiOrigin} culture:${cfg.culture}`,
+    `[Run] seed:${getRandomSeed()} budget:${cfg.budgetMode} suppression:${cfg.suppressionMode} spawnEnergy:${cfg.spawnInitialEnergy} metabolicScale:${cfg.metabolicScale} distressScale:${cfg.distressFireChanceScale} multiOrigin:${cfg.multiOrigin} culture:${cfg.culture}`,
   );
 
   const canvas = document.getElementById('canvas') as HTMLCanvasElement;
@@ -65,7 +65,6 @@ async function main() {
   const world = new World();
   const organisms = new OrganismManager();
   const ruleEval = new RuleEvaluator(world, organisms, {
-    neighborMode: cfg.neighborMode,
     budgetMode: cfg.budgetMode,
     suppressionMode: cfg.suppressionMode,
     metabolicScale: cfg.metabolicScale,
@@ -100,7 +99,6 @@ async function main() {
     const q: number[] = [seed];
     componentMaskCpu[seed] = 1;
     let qi = 0;
-    const use8 = cfg.neighborMode === 'eight';
     while (qi < q.length) {
       const idx = q[qi++]!;
       const x = idx % GRID_WIDTH;
@@ -108,7 +106,6 @@ async function main() {
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (dx === 0 && dy === 0) continue;
-          if (!use8 && dx !== 0 && dy !== 0) continue;
           const nx = x + dx;
           const ny = y + dy;
           if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
