@@ -103,7 +103,7 @@ Browser query options (examples):
 
 Other query params (all optional; defaults shown):
 
-- `?seed=21719667` — unsigned 32-bit seed (reloads apply it).
+- `?seed=3418996282` — unsigned 32-bit seed (reloads apply it).
 - `?budget=local|global` — energy-budget bookkeeping mode (default: `local`).
 - `?suppression=on|off` — suppression toggle (default: `on`).
 - `?spawnEnergy=60` — initial spawn energy scalar (default: `60`).
