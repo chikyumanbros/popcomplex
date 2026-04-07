@@ -152,7 +152,7 @@ Wear is a **single-bit XOR** plus a bump to the parallel `degradation[]` track. 
 
 `transcribe` returns `new Tape(data)` with a **fresh zero** wear array. Parent **degradation** never directly copies to offspring: it only **biases** transcription noise (especially on the replication key).
 
-Reproduction uses `transcribeForReproductionOutcome`: instead of hard stillbirth, it can yield a **degraded birth** outcome — a child is still spawned but starts weaker (lower initial energy) and may be given **intentional initial wear / NOPs** as “repair debt” to preserve lineage continuity while penalizing low-fidelity replication.
+Reproduction uses `transcribeForReproductionOutcome`: after the noisy copy, it applies a probabilistic **proofreading** step that can revert some mutated bytes back toward the parent (strongest on the replication key, then rule opcodes; NN bytes are proofread lightly). Proofreading strength scales primarily with **local same-org neighborhood quorum** (organization), with a smaller capped boost from overall colony size. Instead of hard stillbirth, reproduction can yield a **degraded birth** outcome — a child is still spawned but starts weaker (lower initial energy) and may be given **intentional initial wear / NOPs** as “repair debt” to preserve lineage continuity while penalizing low-fidelity replication.
 
 ### NN weights (bytes 128–255)
 

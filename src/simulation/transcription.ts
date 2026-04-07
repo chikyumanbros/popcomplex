@@ -60,11 +60,37 @@ const REPL_ABORT_DEG = 0.2;
 const REPL_ABORT_CROSS = 0.38;
 const REPL_ABORT_CAP = 0.6;
 
+// ==================== Proofreading (replication-like error correction) ====================
+// Proofreading runs only for reproduction copies (not for generic `transcribe()`), and is intentionally
+// probabilistic so evolution still proceeds. Strength scales with parent health and colony size.
+const PROOFREAD_ENABLE_REPL_KEY = true;
+const PROOFREAD_ENABLE_RULE_OPCODES = true;
+const PROOFREAD_ENABLE_RULE_ROWS = true;
+const PROOFREAD_ENABLE_NN = true;
+
+// Base per-byte "revert to parent" probabilities before scaling/clamping.
+const PROOFREAD_P0_REPL_KEY = 0.72;
+const PROOFREAD_P0_RULE_OPCODE = 0.42;
+const PROOFREAD_P0_RULE_ROW_OTHER = 0.18; // other bytes within rule rows (flags/threshold/param)
+const PROOFREAD_P0_NN = 0.06;
+
+// Upper bounds after scaling (prevents total freeze even for huge/healthy colonies).
+const PROOFREAD_PMAX_REPL_KEY = 0.9;
+const PROOFREAD_PMAX_RULE_OPCODE = 0.75;
+const PROOFREAD_PMAX_RULE_ROW_OTHER = 0.45;
+const PROOFREAD_PMAX_NN = 0.18;
+
 export interface TranscriptionContext {
   /** Approx mean cell energy of the parent organism (0..~cap). Used to stabilize copying when healthy. */
   avgEnergy?: number;
   /** Parent organism age in ticks. Older parents copy a bit less reliably. */
   age?: number;
+  /** Parent organism live cell count; larger colonies proofread more effectively. */
+  orgCells?: number;
+  /** Local same-org neighborhood density at the reproduction site (0..1 over 8 Moore neighbors). */
+  localQuorum01?: number;
+  /** Local social signal cohesion (0..1-ish). If absent, proofreading ignores cohesion. */
+  localCohesion01?: number;
 }
 
 function clamp01(x: number): number {
@@ -108,8 +134,68 @@ export function transcribeForReproductionOutcome(
   ctx?: TranscriptionContext,
 ): { tape: Tape; degraded: boolean; failP: number; mismatchBits: number; degMean: number } {
   const data = transcribeCore(parent, ctx);
+  proofreadAgainstParent(parent.data, data, ctx);
   const { aborted, failP, mismatchBits, degMean } = replicationAborted(parent, data);
   return { tape: new Tape(data), degraded: aborted, failP, mismatchBits, degMean };
+}
+
+function proofreadAgainstParent(parentData: Uint8Array, childData: Uint8Array, ctx?: TranscriptionContext) {
+  const avgE = Math.max(0, ctx?.avgEnergy ?? 50);
+  const age = Math.max(0, ctx?.age ?? 0);
+  const orgCells = Math.max(1, Math.trunc(ctx?.orgCells ?? 1));
+  const localQ = clamp01(ctx?.localQuorum01 ?? 0);
+  const cohesion01 = clamp01(ctx?.localCohesion01 ?? 0);
+
+  const health01 = clamp01(avgE / 50);          // 0 starving → 1 healthy
+  const age01 = clamp01(age / 5000);            // 0 young → 1 very old
+  const size01 = clamp01(Math.log2(orgCells) / 6); // 1..64 => ~0..1 (capped)
+
+  // Hybrid (C): primary driver is *local* organization (same-org neighborhood quorum) aligned with REPAIR,
+  // with a smaller, capped global-size bonus for "civilization" without rewarding sparse sprawl.
+  const localOrg = 0.25 + 0.95 * localQ;                 // 0.25..1.20
+  const socialOrg = 0.95 + 0.1 * cohesion01;             // 0.95..1.05 (subtle)
+  const globalBonus = 0.8 + 0.25 * size01;               // 0.80..1.05 (capped)
+  // Stronger when healthy, weaker when old (still non-zero so selection doesn't trivially lock-in).
+  const scale = Math.max(
+    0.22,
+    (0.55 + 0.45 * health01) * (1 - 0.35 * age01) * localOrg * socialOrg * globalBonus,
+  );
+
+  const clampP = (p0: number, pMax: number) => Math.max(0, Math.min(pMax, p0 * scale));
+
+  // 1) Replication key: most strongly proofread.
+  if (PROOFREAD_ENABLE_REPL_KEY) {
+    const p = clampP(PROOFREAD_P0_REPL_KEY, PROOFREAD_PMAX_REPL_KEY);
+    for (let k = 0; k < REPLICATION_KEY_LEN; k++) {
+      const i = REPLICATION_KEY_OFFSET + k;
+      if (childData[i] !== parentData[i] && randomF32() < p) childData[i] = parentData[i]!;
+    }
+  }
+
+  // 2) Rule table: opcode bytes are more strongly proofread than other columns.
+  if (PROOFREAD_ENABLE_RULE_OPCODES || PROOFREAD_ENABLE_RULE_ROWS) {
+    const pOp = clampP(PROOFREAD_P0_RULE_OPCODE, PROOFREAD_PMAX_RULE_OPCODE);
+    const pOther = clampP(PROOFREAD_P0_RULE_ROW_OTHER, PROOFREAD_PMAX_RULE_ROW_OTHER);
+    for (let r = 0; r < MAX_RULES; r++) {
+      const off = CONDITIONS_OFFSET + r * RULE_SIZE;
+      for (let b = 0; b < RULE_SIZE; b++) {
+        const i = off + b;
+        const isOpcode = b === 2;
+        if (isOpcode ? !PROOFREAD_ENABLE_RULE_OPCODES : !PROOFREAD_ENABLE_RULE_ROWS) continue;
+        if (childData[i] === parentData[i]) continue;
+        const p = isOpcode ? pOp : pOther;
+        if (randomF32() < p) childData[i] = parentData[i]!;
+      }
+    }
+  }
+
+  // 3) NN bytes: very light proofreading (prevents immediate chaotic drift without freezing adaptation).
+  if (PROOFREAD_ENABLE_NN) {
+    const p = clampP(PROOFREAD_P0_NN, PROOFREAD_PMAX_NN);
+    for (let i = 128; i < TAPE_SIZE; i++) {
+      if (childData[i] !== parentData[i] && randomF32() < p) childData[i] = parentData[i]!;
+    }
+  }
 }
 
 function transcribeCore(parent: Tape, ctx?: TranscriptionContext): Uint8Array {

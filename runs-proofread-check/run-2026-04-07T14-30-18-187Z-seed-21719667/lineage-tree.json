@@ -1,0 +1,278 @@
+[
+  {
+    "id": 1,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 75
+  },
+  {
+    "id": 2,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 253
+  },
+  {
+    "id": 3,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 110
+  },
+  {
+    "id": 4,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 5,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 281
+  },
+  {
+    "id": 6,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 266
+  },
+  {
+    "id": 7,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 65
+  },
+  {
+    "id": 8,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 271
+  },
+  {
+    "id": 9,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 106
+  },
+  {
+    "id": 10,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 118
+  },
+  {
+    "id": 11,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 240
+  },
+  {
+    "id": 12,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 118
+  },
+  {
+    "id": 13,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 14,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 15,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 16,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 17,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 83
+  },
+  {
+    "id": 18,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 19,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 139
+  },
+  {
+    "id": 20,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 21,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 22,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 154
+  },
+  {
+    "id": 23,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 146
+  },
+  {
+    "id": 24,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 25,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 78
+  },
+  {
+    "id": 26,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 27,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 60
+  },
+  {
+    "id": 28,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": null
+  },
+  {
+    "id": 29,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 90
+  },
+  {
+    "id": 30,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 87
+  },
+  {
+    "id": 31,
+    "parentId": 26,
+    "birthTick": 7,
+    "deathTick": 28
+  },
+  {
+    "id": 32,
+    "parentId": 26,
+    "birthTick": 47,
+    "deathTick": 68
+  },
+  {
+    "id": 33,
+    "parentId": 26,
+    "birthTick": 87,
+    "deathTick": 109
+  },
+  {
+    "id": 34,
+    "parentId": 15,
+    "birthTick": 115,
+    "deathTick": 130
+  },
+  {
+    "id": 35,
+    "parentId": 23,
+    "birthTick": 122,
+    "deathTick": 140
+  },
+  {
+    "id": 36,
+    "parentId": 26,
+    "birthTick": 127,
+    "deathTick": 151
+  },
+  {
+    "id": 37,
+    "parentId": 13,
+    "birthTick": 129,
+    "deathTick": 182
+  },
+  {
+    "id": 38,
+    "parentId": 2,
+    "birthTick": 134,
+    "deathTick": 158
+  },
+  {
+    "id": 39,
+    "parentId": 5,
+    "birthTick": 161,
+    "deathTick": 175
+  },
+  {
+    "id": 40,
+    "parentId": 26,
+    "birthTick": 171,
+    "deathTick": 192
+  },
+  {
+    "id": 41,
+    "parentId": 20,
+    "birthTick": 183,
+    "deathTick": 216
+  },
+  {
+    "id": 42,
+    "parentId": 11,
+    "birthTick": 187,
+    "deathTick": 201
+  },
+  {
+    "id": 43,
+    "parentId": 26,
+    "birthTick": 214,
+    "deathTick": 237
+  },
+  {
+    "id": 44,
+    "parentId": 13,
+    "birthTick": 217,
+    "deathTick": null
+  },
+  {
+    "id": 45,
+    "parentId": 8,
+    "birthTick": 268,
+    "deathTick": 274
+  },
+  {
+    "id": 46,
+    "parentId": 26,
+    "birthTick": 272,
+    "deathTick": 298
+  }
+]

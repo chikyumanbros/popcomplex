@@ -1164,26 +1164,60 @@ export class RuleEvaluator {
       this.world.setRuleRoutesByIdx(cell.idx, a, b, c);
     }
 
-    // 1) If a rule opcode byte is invalid, first clamp it to NOP (fail-soft: "dead row").
-    if (this.isRuleOpcodeByte(idx) && tape.data[idx] > MAX_VALID_ACTION_OPCODE) {
-      tape.data[idx] = ActionOpcode.NOP;
-      recordInvalidOpcodeClamp();
+    // 1) If a rule opcode byte is invalid, prefer a quorum-gated "proofread" toward a healthy donor rule.
+    // If we can't find a valid donor, fall back to clamping to NOP (fail-soft: "dead row").
+    const quorum01 = Math.max(0, Math.min(1, kinSum / 4)); // 0..1-ish (same-org 0..4 plus weighted foreign)
+    const isRuleTableByte = idx >= CONDITIONS_OFFSET && idx < CONDITIONS_OFFSET + MAX_RULES * RULE_SIZE;
+    const ruleIdx = isRuleTableByte ? Math.floor((idx - CONDITIONS_OFFSET) / RULE_SIZE) : -1;
+    const rowOff = ruleIdx >= 0 ? CONDITIONS_OFFSET + ruleIdx * RULE_SIZE : -1;
+    if (this.isRuleOpcodeByte(idx) && (tape.data[idx] & 0xff) > MAX_VALID_ACTION_OPCODE) {
+      // Find best donor rule for opcode (prefer valid, non-NOP, low wear).
+      let best = -1;
+      let bestScore = -Infinity;
+      for (let r = 0; r < MAX_RULES; r++) {
+        if (r === ruleIdx) continue;
+        const off = CONDITIONS_OFFSET + r * RULE_SIZE;
+        const rawOp = tape.data[off + 2] & 0xff;
+        const opOk = rawOp !== ActionOpcode.NOP && rawOp <= MAX_VALID_ACTION_OPCODE;
+        if (!opOk) continue;
+        let wear = 0;
+        for (let b = 0; b < RULE_SIZE; b++) wear += tape.degradation[off + b];
+        const score = 10000 - wear;
+        if (score > bestScore) { bestScore = score; best = r; }
+      }
+      const pProof = Math.min(0.95, (0.22 + 0.25 * quorum01) * (0.45 + 0.55 * inten));
+      if (best >= 0 && randomF32() < pProof) {
+        const src = CONDITIONS_OFFSET + best * RULE_SIZE;
+        tape.data[idx] = tape.data[src + 2]!;
+      } else {
+        tape.data[idx] = ActionOpcode.NOP;
+        recordInvalidOpcodeClamp();
+      }
     }
 
-    // 2) Quorum-gated bypass: if we repaired inside the rule table, sometimes re-route by copying a healthy rule row
-    // into a heavily damaged one. This avoids "all or nothing" restoration while keeping the system driving.
-    const quorum01 = Math.max(0, Math.min(1, kinSum / 4)); // 0..1-ish (same-org 0..4 plus weighted foreign)
-    if (idx >= CONDITIONS_OFFSET && idx < CONDITIONS_OFFSET + MAX_RULES * RULE_SIZE) {
-      if (randomF32() < REPAIR_RULE_BYPASS_BASE_P * quorum01 * inten) {
-        const ruleIdx = Math.floor((idx - CONDITIONS_OFFSET) / RULE_SIZE);
+    // 2) Quorum-gated bypass/proofread: if we repaired inside the rule table, sometimes re-route by copying a healthy
+    // rule row into a damaged/ineffective one. This is a "weak proofreading" analog: redundancy helps restore function.
+    if (isRuleTableByte && ruleIdx >= 0 && rowOff >= 0) {
+      let rowWear = 0;
+      for (let b = 0; b < RULE_SIZE; b++) rowWear += tape.degradation[rowOff + b];
+      const wear01 = Math.max(0, Math.min(1, rowWear / (RULE_SIZE * 192))); // ~0..1 for typical heavy wear
+      const rawOp = tape.data[rowOff + 2] & 0xff;
+      const opBroken = rawOp === ActionOpcode.NOP || rawOp > MAX_VALID_ACTION_OPCODE;
+      // More likely to proofread when the slot is badly worn or effectively dead.
+      const damageBoost = Math.max(wear01, opBroken ? 0.75 : 0);
+      const pBypass = Math.min(
+        0.8,
+        REPAIR_RULE_BYPASS_BASE_P * quorum01 * inten * (0.45 + 0.85 * damageBoost),
+      );
+      if (randomF32() < pBypass) {
         let best = -1;
         let bestScore = -Infinity;
         for (let r = 0; r < MAX_RULES; r++) {
           if (r === ruleIdx) continue;
           const off = CONDITIONS_OFFSET + r * RULE_SIZE;
           // Prefer low-wear, non-NOP rules as donors.
-          const rawOp = tape.data[off + 2] & 0xff;
-          const opOk = rawOp !== ActionOpcode.NOP && rawOp <= MAX_VALID_ACTION_OPCODE;
+          const dRawOp = tape.data[off + 2] & 0xff;
+          const opOk = dRawOp !== ActionOpcode.NOP && dRawOp <= MAX_VALID_ACTION_OPCODE;
           let wear = 0;
           for (let b = 0; b < RULE_SIZE; b++) wear += tape.degradation[off + b];
           const score = (opOk ? 1 : 0) * 1000 - wear;
@@ -1191,7 +1225,7 @@ export class RuleEvaluator {
         }
         if (best >= 0) {
           const src = CONDITIONS_OFFSET + best * RULE_SIZE;
-          const dst = CONDITIONS_OFFSET + ruleIdx * RULE_SIZE;
+          const dst = rowOff;
           for (let b = 0; b < RULE_SIZE; b++) {
             tape.data[dst + b] = tape.data[src + b];
             // copying doesn't erase wear; it just makes the slot "coherently wired" again
@@ -1452,6 +1486,18 @@ export class RuleEvaluator {
     }
     const minRequired = REPRODUCE_ACTION_COST + 1;
     if (cell.energy < minRequired) return false;
+    // Local organization: same-org Moore neighbor density and signal cohesion at the reproduction site.
+    // Used to scale reproduction proofreading (aligned with REPAIR's local-quorum concept).
+    let sameN = 0;
+    let totalN = 0;
+    for (const [dx, dy] of this.neighborDirs()) {
+      const nx = cell.x + dx, ny = cell.y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+      totalN++;
+      if (this.world.getOrganismId(nx, ny) === org.id) sameN++;
+    }
+    const localQuorum01 = totalN > 0 ? sameN / totalN : 0;
+    const localCohesion01 = this.localSignalCohesion(cell);
     for (const [dx, dy] of this.neighborDirs()) {
       const nx = cell.x + dx, ny = cell.y + dy;
       if (!this.world.isEmpty(nx, ny)) continue;
@@ -1459,7 +1505,13 @@ export class RuleEvaluator {
       let totalE = 0;
       for (const idx of org.cells) totalE += this.world.getCellEnergyByIdx(idx);
       const avgE = org.cells.size > 0 ? totalE / org.cells.size : 0;
-      const outcome = transcribeForReproductionOutcome(org.tape, { avgEnergy: avgE, age: org.age });
+      const outcome = transcribeForReproductionOutcome(org.tape, {
+        avgEnergy: avgE,
+        age: org.age,
+        orgCells: org.cells.size,
+        localQuorum01,
+        localCohesion01,
+      });
       const childTape = outcome.tape;
       if (outcome.degraded) {
         // Degraded birth: child starts with repair debt (wear) concentrated in fragile “life support” areas.
