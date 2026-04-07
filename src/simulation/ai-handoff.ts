@@ -132,6 +132,26 @@ interface OrgProfile {
   invalidOpcode: number;
   validRules: number;
   nopRules: number;
+  liveCellRatio: number;
+  deadCellRatio: number;
+  rotMean: number;
+  rotMax: number;
+  rotMaxDead: number;
+}
+
+function softOrgStateLabel(p: Pick<OrgProfile, 'liveCellRatio' | 'deadCellRatio' | 'rotMaxDead'>): string {
+  const live = Math.max(0, Math.min(1, p.liveCellRatio));
+  const dead = Math.max(0, Math.min(1, p.deadCellRatio));
+  const rDead = Math.max(0, Math.min(1, p.rotMaxDead));
+
+  // Avoid calling a functioning organism "dead" because of a single necrotic cell.
+  if (live >= 0.98) return dead <= 0.02 ? 'operational' : 'operational+necrosis';
+  if (live >= 0.80) return dead <= 0.10 ? 'strained' : 'strained+necrosis';
+  if (live >= 0.50) return 'limping';
+
+  // Mostly non-operational tissue: describe process without discrete death language.
+  if (live > 0.05) return rDead > 0.7 ? 'dissolving' : 'inactive';
+  return rDead > 0.7 ? 'near-dissolve' : 'inactive';
 }
 
 function summarizeOrganism(world: World, org: Organism): OrgProfile {
@@ -150,6 +170,11 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
   let maxX = 0;
   let maxY = 0;
   let boundaryFaces = 0;
+  let liveCells = 0;
+  let deadCells = 0;
+  let rotSum = 0;
+  let rotMax = 0;
+  let rotMaxDead = 0;
 
   const own = org.cells;
   for (const idx of own) {
@@ -166,6 +191,16 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
     stomach += world.getStomachByIdx(idx);
     morphA += world.getMorphogenA(idx);
     morphB += world.getMorphogenB(idx);
+    const e = world.getCellEnergyByIdx(idx);
+    const r = world.rot[idx] ?? 0;
+    if (e > 0) {
+      liveCells++;
+    } else {
+      deadCells++;
+      if (r > rotMaxDead) rotMaxDead = r;
+    }
+    rotSum += r;
+    if (r > rotMax) rotMax = r;
     const [mkEat, mkDigest, mkSignal, mkMove] = world.getMarkersByIdx(idx);
     markerEat += mkEat;
     markerDigest += mkDigest;
@@ -217,6 +252,11 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
     invalidOpcode: rules.invalid,
     validRules: rules.valid,
     nopRules: rules.nop,
+    liveCellRatio: liveCells / n,
+    deadCellRatio: deadCells / n,
+    rotMean: rotSum / n,
+    rotMax,
+    rotMaxDead,
   };
 }
 
@@ -230,6 +270,11 @@ export interface AIHandoffInput {
   bookkeepingSnapshot?: EnergyBookkeeping;
   /** Optional: additional counters since last telemetry reset. */
   telemetrySnapshot?: TelemetrySnapshot;
+  /**
+   * Optional: how many sim ticks have elapsed since the last telemetry reset for `telemetrySnapshot`.
+   * In the browser build, the periodic console logger may reset telemetry frequently.
+   */
+  telemetryWindowTicks?: number;
 }
 
 export type AIHandoffPromptPreset = 'review' | 'ecology' | 'tape';
@@ -240,11 +285,13 @@ export function buildAIHandoffPrompt(preset: AIHandoffPromptPreset): string {
       return [
         'Focus on ecology and evolution.',
         'From the mood mix, lineage shares, and notable organisms, infer active niches (forager, mover, digester, signal-coordinator, etc.), explain why they are stable/unstable, and propose 3 interventions to increase long-horizon diversity without breaking energy closure.',
+        'Important: This system has explicit network/topology and quorum effects (connectivity-dependent digestion, isolation penalties, REPAIR quorum + social cohesion bonus, JAM-gated cross-lineage cooperation). Interpret robustness and “limping” strategies in that light, not as bugs by default.',
       ].join('\n');
     case 'tape':
       return [
         'Focus on tape health and behavioral reliability.',
         'Use invalidOpcode counts, degradation sums, and the provided tape dumps to identify failure modes (dead rules, brittle regions, over-mutation zones), then suggest exact checks/metrics to add in code/tests.',
+        'Important: Many invalid opcodes can be neutral (fail-soft to NOP) and organisms can remain viable via network-mediated robustness. Distinguish “harmless dead rows” from true failure (loss of essential pipeline, runaway costs, or loss of adaptive response).',
       ].join('\n');
     case 'review':
     default:
@@ -252,12 +299,13 @@ export function buildAIHandoffPrompt(preset: AIHandoffPromptPreset): string {
         'Analyze this snapshot as an artificial-life code reviewer.',
         'Prioritize: (1) likely logic bugs/regressions, (2) ecological interpretation of niches and dominance, (3) concrete parameter/code changes with expected side effects.',
         'Use specific organism IDs/lineages from the report when explaining.',
+        'Important: Account for intended robustness: same-org network effects, quorum/consensus biases, and fail-soft opcode normalization (unknown opcodes → NOP). Avoid labeling “high invalidOpcode” as broken unless it correlates with clear functional loss.',
       ].join('\n');
   }
 }
 
 export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
-  const { tick, world, organisms, ruleEval, ui, bookkeepingSnapshot, telemetrySnapshot } = input;
+  const { tick, world, organisms, ruleEval, ui, bookkeepingSnapshot, telemetrySnapshot, telemetryWindowTicks } = input;
   const orgList = [...organisms.organisms.values()].sort((a, b) => b.cells.size - a.cells.size);
 
   let orgRegistryCells = 0;
@@ -276,7 +324,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   lines.push('## PopComplex — AI handoff snapshot');
   lines.push('');
   lines.push('### How to use (for the human)');
-  lines.push('Paste this whole block into an AI assistant and ask e.g.: energy conservation issues, dominance / diversity, broken rule opcodes, or design suggestions.');
+  lines.push('Paste this whole block into an AI assistant and ask e.g.: energy conservation issues, dominance / diversity, tape robustness, or design suggestions.');
   lines.push(
     `- **Full tape + wear**: logical payload is **256B data + 256B degradation**. Hex blocks below list both. **TAPE512_B64** is fixed-length base64 of data‖degradation (${TAPE_SNAPSHOT_BYTES} raw bytes). Decode in-app: decodeTapeSnapshotBase64 → tapeFromSnapshot in tape.ts.`,
   );
@@ -324,6 +372,9 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
         (typeof repairSucc === 'number' ? ` repairSucc=${repairSucc}` : '') +
         (typeof clampN === 'number' ? ` invalidClamp=${clampN}` : ''),
     );
+    if (typeof telemetryWindowTicks === 'number' && Number.isFinite(telemetryWindowTicks) && telemetryWindowTicks >= 0) {
+      lines.push(`- **telemetry window**: ~${Math.round(telemetryWindowTicks)} ticks`);
+    }
   }
   if (ui) {
     lines.push(`- **UI**: paused=${ui.paused} speed=${ui.speed}`);
@@ -500,9 +551,9 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
   lines.push('- **Dead tissue gut leak + recovery**: dead cells leak a fraction of stomach each tick; same-org living neighbors preferentially recover it into stomach inflow, remainder becomes local env energy (see `rule-evaluator.ts`).');
   lines.push('');
 
-  lines.push('### Per-organism (up to 8, largest first)');
-  const top = orgList.slice(0, 8);
-  for (const org of top) {
+  lines.push('### Per-organism (up to 8, largest by cells)');
+  const topCells = orgList.slice(0, 8);
+  for (const org of topCells) {
     let e = 0;
     let s = 0;
     for (const idx of org.cells) {
@@ -514,14 +565,46 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     const moods = ['eat', 'grow', 'move', 'conserve']
       .map((m, i) => `${m}:${org.nnOutput[i].toFixed(3)}`)
       .join(' ');
+    const p = profiles.find((x) => x.id === org.id);
+    const state = p ? softOrgStateLabel(p) : 'unknown';
+    const live = p ? p.liveCellRatio : 0;
+    const rotMx = p ? p.rotMax : 0;
+    const rotDead = p ? p.rotMaxDead : 0;
     lines.push(
       `- **#${org.id}** cells=${org.cells.size} age=${org.age} maxCells=${org.tape.getMaxCells()} ` +
         `reproCd=${Math.max(0, Math.round(org.reproduceCooldown))} E=${e.toFixed(1)} S=${s.toFixed(1)} ` +
         `nnDom=${org.nnDominant} (${moods}) tapeDegΣ=${degSum} ` +
-        `rules: valid=${rules.valid} nop=${rules.nop} invalidOpcode=${rules.invalid}`,
+        `rules: valid=${rules.valid} nop=${rules.nop} invalidOpcode=${rules.invalid} ` +
+        `state=${state} live=${live.toFixed(2)} rotMax=${rotMx.toFixed(2)} rotMaxDead=${rotDead.toFixed(2)}`,
     );
   }
   if (orgList.length === 0) lines.push('- _(none)_');
+  lines.push('');
+
+  lines.push('### Per-organism (up to 8, most live cells)');
+  const byLiveCells = [...profiles]
+    .map((p) => ({ p, liveCells: p.liveCellRatio * Math.max(1, p.cells) }))
+    .sort((a, b) => b.liveCells - a.liveCells)
+    .slice(0, 8);
+  for (const item of byLiveCells) {
+    const p = item.p;
+    const org = organisms.get(p.id);
+    if (!org) continue;
+    const degSum = org.tape.degradation.reduce((a, b) => a + b, 0);
+    const rules = countInvalidRuleOpcodes(org.tape.data);
+    const moods = ['eat', 'grow', 'move', 'conserve']
+      .map((m, i) => `${m}:${org.nnOutput[i].toFixed(3)}`)
+      .join(' ');
+    const state = softOrgStateLabel(p);
+    lines.push(
+      `- **#${p.id}** liveCells≈${item.liveCells.toFixed(1)} cells=${p.cells} age=${p.age} maxCells=${org.tape.getMaxCells()} ` +
+        `reproCd=${Math.max(0, Math.round(org.reproduceCooldown))} E=${p.energy.toFixed(1)} S=${p.stomach.toFixed(1)} ` +
+        `nnDom=${org.nnDominant} (${moods}) tapeDegΣ=${degSum} ` +
+        `rules: valid=${rules.valid} nop=${rules.nop} invalidOpcode=${rules.invalid} ` +
+        `state=${state} live=${p.liveCellRatio.toFixed(2)} rotMax=${p.rotMax.toFixed(2)} rotMaxDead=${p.rotMaxDead.toFixed(2)}`,
+    );
+  }
+  if (byLiveCells.length === 0) lines.push('- _(none)_');
   lines.push('');
 
   const notable: Array<{ title: string; profile: OrgProfile }> = [];
@@ -554,13 +637,15 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     for (const item of notable) {
       const p = item.profile;
       const degSum = organisms.get(p.id)?.tape.degradation.reduce((a, b) => a + b, 0) ?? 0;
+      const state = softOrgStateLabel(p);
       lines.push(
         `- **${item.title} → #${p.id}** face=0x${p.lineage.toString(16).padStart(6, '0')} genetic=0x${p.geneticKinTag.toString(16).padStart(6, '0')} ` +
           `cells=${p.cells} age=${p.age} mood=${MOOD_NAMES[p.nnDominant]} ` +
           `biomass=${p.biomass.toFixed(1)} E/cell=${p.meanEnergy.toFixed(2)} S/cell=${p.meanStomach.toFixed(2)} ` +
           `markers[e,d,s,m]=[${p.meanMarkers.map((v) => v.toFixed(1)).join(', ')}] ` +
           `boundary=${p.boundaryRatio.toFixed(3)} compact=${p.compactness.toFixed(3)} ` +
-          `center=(${p.centerX.toFixed(1)}, ${p.centerY.toFixed(1)}) tapeDegΣ=${degSum}`,
+          `center=(${p.centerX.toFixed(1)}, ${p.centerY.toFixed(1)}) tapeDegΣ=${degSum} ` +
+          `state=${state} live=${p.liveCellRatio.toFixed(2)} rotMax=${p.rotMax.toFixed(2)} rotMaxDead=${p.rotMaxDead.toFixed(2)}`,
       );
     }
     lines.push('');

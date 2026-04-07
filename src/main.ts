@@ -128,6 +128,7 @@ async function main() {
   let tick = 0;
   let frameCount = 0;
   let lastLoggedTick = -1;
+  let lastTelemetryResetTick = 0;
   let bookkeepingAtLastLog: EnergyBookkeeping | null = null;
   let previousOrgIds = new Set<number>(organisms.organisms.keys());
   let birthsSinceLastLog = 0;
@@ -197,6 +198,7 @@ async function main() {
           ? lastChartPopForLog
           : measurePopulationMetrics(world, organisms);
       const telem = snapshotAndResetTelemetry();
+      lastTelemetryResetTick = tick;
       logWorldState(organisms, ruleEval, world, {
         tick,
         bookkeepingNow: bkNow,
@@ -264,6 +266,7 @@ async function main() {
       ui,
       bookkeepingSnapshot: bk,
       telemetrySnapshot: snapshotTelemetry(),
+      telemetryWindowTicks: tick - lastTelemetryResetTick,
     });
   }
 

@@ -6,6 +6,19 @@ import { GRID_WIDTH, GRID_HEIGHT } from '../simulation/constants';
 import { formatTapeRulesInspectorHtml } from '../simulation/tape';
 import { tapeDegradationPercent, wearLevelFromDegradation } from '../simulation/tape-health';
 
+function softVitalStateLabel(cellEnergy: number, rot01: number): string {
+  const r = Number.isFinite(rot01) ? Math.max(0, Math.min(1, rot01)) : 0;
+  if (cellEnergy > 0) {
+    if (r < 0.05) return 'operational';
+    if (r < 0.35) return 'strained';
+    return 'injured';
+  }
+  // energy <= 0: deterministic rot progression / dissolution path (no discrete "death" event)
+  if (r < 0.15) return 'inactive';
+  if (r < 0.70) return 'dissolving';
+  return 'near-dissolve';
+}
+
 export function setupInspector(
   canvas: HTMLCanvasElement,
   world: World,
@@ -64,7 +77,7 @@ export function setupInspector(
     const routesStr = `routes ${String(rr0).padStart(2, '\u2007')},${String(rr1).padStart(2, '\u2007')},${String(rr2).padStart(2, '\u2007')}`;
     const rot = world.rot[idx] ?? 0;
     const rotStr = `rot ${(rot * 100).toFixed(1).padStart(5, '\u2007')}%`;
-    const deadStr = world.getCellEnergyByIdx(idx) <= 0 ? 'dead' : 'live';
+    const stateLabel = softVitalStateLabel(world.getCellEnergyByIdx(idx), rot);
 
     let tapeHtml = '<div class="tape-view">';
     const bpl = 16;
@@ -106,7 +119,7 @@ export function setupInspector(
       </div>
       <div class="nn-bias">NN  ${nnStr}</div>
       <div class="nn-bias">${routesStr}</div>
-      <div class="nn-bias">${rotStr} · ${deadStr}</div>
+      <div class="nn-bias">state ${stateLabel} · ${rotStr}</div>
       ${formatTapeRulesInspectorHtml(org.tape)}
       ${tapeHtml}
     `;
