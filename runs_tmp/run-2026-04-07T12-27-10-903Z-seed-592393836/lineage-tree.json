@@ -1,0 +1,884 @@
+[
+  {
+    "id": 1,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 103
+  },
+  {
+    "id": 2,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 468
+  },
+  {
+    "id": 3,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 392
+  },
+  {
+    "id": 4,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 412
+  },
+  {
+    "id": 5,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 276
+  },
+  {
+    "id": 6,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 189
+  },
+  {
+    "id": 7,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 110
+  },
+  {
+    "id": 8,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 225
+  },
+  {
+    "id": 9,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 170
+  },
+  {
+    "id": 10,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 240
+  },
+  {
+    "id": 11,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 164
+  },
+  {
+    "id": 12,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 137
+  },
+  {
+    "id": 13,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 396
+  },
+  {
+    "id": 14,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 704
+  },
+  {
+    "id": 15,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 333
+  },
+  {
+    "id": 16,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 485
+  },
+  {
+    "id": 17,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 71
+  },
+  {
+    "id": 18,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 973
+  },
+  {
+    "id": 19,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 107
+  },
+  {
+    "id": 20,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 197
+  },
+  {
+    "id": 21,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 125
+  },
+  {
+    "id": 22,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 248
+  },
+  {
+    "id": 23,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 407
+  },
+  {
+    "id": 24,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 372
+  },
+  {
+    "id": 25,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 433
+  },
+  {
+    "id": 26,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 622
+  },
+  {
+    "id": 27,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 202
+  },
+  {
+    "id": 28,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 105
+  },
+  {
+    "id": 29,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 105
+  },
+  {
+    "id": 30,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 183
+  },
+  {
+    "id": 31,
+    "parentId": 13,
+    "birthTick": 122,
+    "deathTick": 132
+  },
+  {
+    "id": 32,
+    "parentId": 5,
+    "birthTick": 126,
+    "deathTick": 131
+  },
+  {
+    "id": 33,
+    "parentId": 10,
+    "birthTick": 140,
+    "deathTick": 169
+  },
+  {
+    "id": 34,
+    "parentId": 2,
+    "birthTick": 144,
+    "deathTick": 1125
+  },
+  {
+    "id": 35,
+    "parentId": 15,
+    "birthTick": 145,
+    "deathTick": 561
+  },
+  {
+    "id": 36,
+    "parentId": 15,
+    "birthTick": 161,
+    "deathTick": 427
+  },
+  {
+    "id": 37,
+    "parentId": 8,
+    "birthTick": 162,
+    "deathTick": 173
+  },
+  {
+    "id": 38,
+    "parentId": 25,
+    "birthTick": 225,
+    "deathTick": 243
+  },
+  {
+    "id": 39,
+    "parentId": 3,
+    "birthTick": 235,
+    "deathTick": 253
+  },
+  {
+    "id": 40,
+    "parentId": 23,
+    "birthTick": 265,
+    "deathTick": 300
+  },
+  {
+    "id": 41,
+    "parentId": 23,
+    "birthTick": 265,
+    "deathTick": 298
+  },
+  {
+    "id": 42,
+    "parentId": 3,
+    "birthTick": 293,
+    "deathTick": 299
+  },
+  {
+    "id": 43,
+    "parentId": 23,
+    "birthTick": 294,
+    "deathTick": 306
+  },
+  {
+    "id": 44,
+    "parentId": 14,
+    "birthTick": 313,
+    "deathTick": 1124
+  },
+  {
+    "id": 45,
+    "parentId": 26,
+    "birthTick": 313,
+    "deathTick": 388
+  },
+  {
+    "id": 46,
+    "parentId": 4,
+    "birthTick": 332,
+    "deathTick": 585
+  },
+  {
+    "id": 47,
+    "parentId": 26,
+    "birthTick": 358,
+    "deathTick": 402
+  },
+  {
+    "id": 48,
+    "parentId": 34,
+    "birthTick": 365,
+    "deathTick": 604
+  },
+  {
+    "id": 49,
+    "parentId": 34,
+    "birthTick": 386,
+    "deathTick": 1822
+  },
+  {
+    "id": 50,
+    "parentId": 44,
+    "birthTick": 428,
+    "deathTick": 462
+  },
+  {
+    "id": 51,
+    "parentId": 34,
+    "birthTick": 441,
+    "deathTick": 1111
+  },
+  {
+    "id": 52,
+    "parentId": 49,
+    "birthTick": 464,
+    "deathTick": 502
+  },
+  {
+    "id": 53,
+    "parentId": 44,
+    "birthTick": 468,
+    "deathTick": 499
+  },
+  {
+    "id": 54,
+    "parentId": 35,
+    "birthTick": 483,
+    "deathTick": 538
+  },
+  {
+    "id": 55,
+    "parentId": 35,
+    "birthTick": 490,
+    "deathTick": 542
+  },
+  {
+    "id": 56,
+    "parentId": 48,
+    "birthTick": 503,
+    "deathTick": 588
+  },
+  {
+    "id": 57,
+    "parentId": 49,
+    "birthTick": 504,
+    "deathTick": 551
+  },
+  {
+    "id": 58,
+    "parentId": 44,
+    "birthTick": 508,
+    "deathTick": 540
+  },
+  {
+    "id": 59,
+    "parentId": 35,
+    "birthTick": 512,
+    "deathTick": 544
+  },
+  {
+    "id": 60,
+    "parentId": 48,
+    "birthTick": 519,
+    "deathTick": 638
+  },
+  {
+    "id": 61,
+    "parentId": 44,
+    "birthTick": 531,
+    "deathTick": 1059
+  },
+  {
+    "id": 62,
+    "parentId": 49,
+    "birthTick": 544,
+    "deathTick": 581
+  },
+  {
+    "id": 63,
+    "parentId": 44,
+    "birthTick": 548,
+    "deathTick": 579
+  },
+  {
+    "id": 64,
+    "parentId": 26,
+    "birthTick": 551,
+    "deathTick": 573
+  },
+  {
+    "id": 65,
+    "parentId": 61,
+    "birthTick": 583,
+    "deathTick": 616
+  },
+  {
+    "id": 66,
+    "parentId": 49,
+    "birthTick": 584,
+    "deathTick": 647
+  },
+  {
+    "id": 67,
+    "parentId": 44,
+    "birthTick": 588,
+    "deathTick": 621
+  },
+  {
+    "id": 68,
+    "parentId": 14,
+    "birthTick": 593,
+    "deathTick": 691
+  },
+  {
+    "id": 69,
+    "parentId": 26,
+    "birthTick": 606,
+    "deathTick": 609
+  },
+  {
+    "id": 70,
+    "parentId": 14,
+    "birthTick": 612,
+    "deathTick": 665
+  },
+  {
+    "id": 71,
+    "parentId": 26,
+    "birthTick": 612,
+    "deathTick": 618
+  },
+  {
+    "id": 72,
+    "parentId": 61,
+    "birthTick": 623,
+    "deathTick": 656
+  },
+  {
+    "id": 73,
+    "parentId": 49,
+    "birthTick": 624,
+    "deathTick": 2005
+  },
+  {
+    "id": 74,
+    "parentId": 44,
+    "birthTick": 628,
+    "deathTick": 661
+  },
+  {
+    "id": 75,
+    "parentId": 34,
+    "birthTick": 639,
+    "deathTick": 648
+  },
+  {
+    "id": 76,
+    "parentId": 34,
+    "birthTick": 640,
+    "deathTick": 648
+  },
+  {
+    "id": 77,
+    "parentId": 51,
+    "birthTick": 661,
+    "deathTick": 831
+  },
+  {
+    "id": 78,
+    "parentId": 61,
+    "birthTick": 663,
+    "deathTick": 695
+  },
+  {
+    "id": 79,
+    "parentId": 49,
+    "birthTick": 664,
+    "deathTick": 703
+  },
+  {
+    "id": 80,
+    "parentId": 44,
+    "birthTick": 668,
+    "deathTick": 702
+  },
+  {
+    "id": 81,
+    "parentId": 61,
+    "birthTick": 703,
+    "deathTick": 748
+  },
+  {
+    "id": 82,
+    "parentId": 49,
+    "birthTick": 704,
+    "deathTick": 745
+  },
+  {
+    "id": 83,
+    "parentId": 44,
+    "birthTick": 708,
+    "deathTick": 740
+  },
+  {
+    "id": 84,
+    "parentId": 49,
+    "birthTick": 744,
+    "deathTick": 785
+  },
+  {
+    "id": 85,
+    "parentId": 44,
+    "birthTick": 748,
+    "deathTick": 781
+  },
+  {
+    "id": 86,
+    "parentId": 61,
+    "birthTick": 754,
+    "deathTick": 787
+  },
+  {
+    "id": 87,
+    "parentId": 44,
+    "birthTick": 755,
+    "deathTick": 1503
+  },
+  {
+    "id": 88,
+    "parentId": 49,
+    "birthTick": 772,
+    "deathTick": 967
+  },
+  {
+    "id": 89,
+    "parentId": 44,
+    "birthTick": 788,
+    "deathTick": 822
+  },
+  {
+    "id": 90,
+    "parentId": 61,
+    "birthTick": 794,
+    "deathTick": 826
+  },
+  {
+    "id": 91,
+    "parentId": 73,
+    "birthTick": 807,
+    "deathTick": 848
+  },
+  {
+    "id": 92,
+    "parentId": 87,
+    "birthTick": 807,
+    "deathTick": 838
+  },
+  {
+    "id": 93,
+    "parentId": 34,
+    "birthTick": 812,
+    "deathTick": 856
+  },
+  {
+    "id": 94,
+    "parentId": 34,
+    "birthTick": 828,
+    "deathTick": 966
+  },
+  {
+    "id": 95,
+    "parentId": 44,
+    "birthTick": 828,
+    "deathTick": 859
+  },
+  {
+    "id": 96,
+    "parentId": 61,
+    "birthTick": 834,
+    "deathTick": 866
+  },
+  {
+    "id": 97,
+    "parentId": 44,
+    "birthTick": 838,
+    "deathTick": 964
+  },
+  {
+    "id": 98,
+    "parentId": 44,
+    "birthTick": 841,
+    "deathTick": 961
+  },
+  {
+    "id": 99,
+    "parentId": 87,
+    "birthTick": 847,
+    "deathTick": 878
+  },
+  {
+    "id": 100,
+    "parentId": 44,
+    "birthTick": 868,
+    "deathTick": 899
+  },
+  {
+    "id": 101,
+    "parentId": 61,
+    "birthTick": 874,
+    "deathTick": 909
+  },
+  {
+    "id": 102,
+    "parentId": 87,
+    "birthTick": 887,
+    "deathTick": 922
+  },
+  {
+    "id": 103,
+    "parentId": 97,
+    "birthTick": 890,
+    "deathTick": 925
+  },
+  {
+    "id": 104,
+    "parentId": 98,
+    "birthTick": 893,
+    "deathTick": 924
+  },
+  {
+    "id": 105,
+    "parentId": 18,
+    "birthTick": 899,
+    "deathTick": 975
+  },
+  {
+    "id": 106,
+    "parentId": 44,
+    "birthTick": 908,
+    "deathTick": 939
+  },
+  {
+    "id": 107,
+    "parentId": 61,
+    "birthTick": 923,
+    "deathTick": 954
+  },
+  {
+    "id": 108,
+    "parentId": 105,
+    "birthTick": 924,
+    "deathTick": 969
+  },
+  {
+    "id": 109,
+    "parentId": 87,
+    "birthTick": 927,
+    "deathTick": 969
+  },
+  {
+    "id": 110,
+    "parentId": 18,
+    "birthTick": 927,
+    "deathTick": 963
+  },
+  {
+    "id": 111,
+    "parentId": 44,
+    "birthTick": 948,
+    "deathTick": 979
+  },
+  {
+    "id": 112,
+    "parentId": 18,
+    "birthTick": 961,
+    "deathTick": 974
+  },
+  {
+    "id": 113,
+    "parentId": 61,
+    "birthTick": 965,
+    "deathTick": 995
+  },
+  {
+    "id": 114,
+    "parentId": 87,
+    "birthTick": 967,
+    "deathTick": 1001
+  },
+  {
+    "id": 115,
+    "parentId": 34,
+    "birthTick": 975,
+    "deathTick": 1038
+  },
+  {
+    "id": 116,
+    "parentId": 34,
+    "birthTick": 979,
+    "deathTick": 1053
+  },
+  {
+    "id": 117,
+    "parentId": 44,
+    "birthTick": 988,
+    "deathTick": 1018
+  },
+  {
+    "id": 118,
+    "parentId": 87,
+    "birthTick": 1007,
+    "deathTick": 1041
+  },
+  {
+    "id": 119,
+    "parentId": 49,
+    "birthTick": 1012,
+    "deathTick": 3073
+  },
+  {
+    "id": 120,
+    "parentId": 51,
+    "birthTick": 1012,
+    "deathTick": 1040
+  },
+  {
+    "id": 121,
+    "parentId": 44,
+    "birthTick": 1028,
+    "deathTick": 1059
+  },
+  {
+    "id": 122,
+    "parentId": 51,
+    "birthTick": 1032,
+    "deathTick": 1056
+  },
+  {
+    "id": 123,
+    "parentId": 87,
+    "birthTick": 1047,
+    "deathTick": 1081
+  },
+  {
+    "id": 124,
+    "parentId": 44,
+    "birthTick": 1068,
+    "deathTick": 1097
+  },
+  {
+    "id": 125,
+    "parentId": 49,
+    "birthTick": 1073,
+    "deathTick": 1957
+  },
+  {
+    "id": 126,
+    "parentId": 87,
+    "birthTick": 1088,
+    "deathTick": 1118
+  },
+  {
+    "id": 127,
+    "parentId": 119,
+    "birthTick": 1124,
+    "deathTick": 5275
+  },
+  {
+    "id": 128,
+    "parentId": 87,
+    "birthTick": 1152,
+    "deathTick": 1181
+  },
+  {
+    "id": 129,
+    "parentId": 49,
+    "birthTick": 1187,
+    "deathTick": 1515
+  },
+  {
+    "id": 130,
+    "parentId": 87,
+    "birthTick": 1193,
+    "deathTick": 1222
+  },
+  {
+    "id": 131,
+    "parentId": 119,
+    "birthTick": 1227,
+    "deathTick": 1640
+  },
+  {
+    "id": 132,
+    "parentId": 87,
+    "birthTick": 1240,
+    "deathTick": 1270
+  },
+  {
+    "id": 133,
+    "parentId": 87,
+    "birthTick": 1280,
+    "deathTick": 1310
+  },
+  {
+    "id": 134,
+    "parentId": 119,
+    "birthTick": 1317,
+    "deathTick": 1912
+  },
+  {
+    "id": 135,
+    "parentId": 87,
+    "birthTick": 1321,
+    "deathTick": 1350
+  },
+  {
+    "id": 136,
+    "parentId": 73,
+    "birthTick": 1323,
+    "deathTick": 1373
+  },
+  {
+    "id": 137,
+    "parentId": 87,
+    "birthTick": 1362,
+    "deathTick": 1392
+  },
+  {
+    "id": 138,
+    "parentId": 73,
+    "birthTick": 1363,
+    "deathTick": 1410
+  },
+  {
+    "id": 139,
+    "parentId": 73,
+    "birthTick": 1403,
+    "deathTick": 1699
+  },
+  {
+    "id": 140,
+    "parentId": 87,
+    "birthTick": 1423,
+    "deathTick": 1453
+  },
+  {
+    "id": 141,
+    "parentId": 131,
+    "birthTick": 1469,
+    "deathTick": 1584
+  },
+  {
+    "id": 142,
+    "parentId": 119,
+    "birthTick": 1472,
+    "deathTick": 3070
+  },
+  {
+    "id": 143,
+    "parentId": 131,
+    "birthTick": 1477,
+    "deathTick": 1583
+  },
+  {
+    "id": 144,
+    "parentId": 134,
+    "birthTick": 1527,
+    "deathTick": 3432
+  },
+  {
+    "id": 145,
+    "parentId": 131,
+    "birthTick": 1582,
+    "deathTick": 1605
+  },
+  {
+    "id": 146,
+    "parentId": 134,
+    "birthTick": 1614,
+    "deathTick": 4132
+  },
+  {
+    "id": 147,
+    "parentId": 144,
+    "birthTick": 1822,
+    "deathTick": 2243
+  }
+]

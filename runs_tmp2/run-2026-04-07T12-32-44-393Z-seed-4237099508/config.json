@@ -1,0 +1,13 @@
+{
+  "runId": "run-2026-04-07T12-32-44-393Z-seed-4237099508",
+  "startedAt": "2026-04-07T12:32:44.393Z",
+  "seed": 4237099508,
+  "ticks": 6000,
+  "logEvery": 500,
+  "budget": "local",
+  "suppression": "on",
+  "spawnEnergy": 60,
+  "metabolicScale": 1,
+  "distressScale": 1,
+  "snapshotEvery": 500
+}

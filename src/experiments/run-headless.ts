@@ -8,6 +8,7 @@ import { tapeSnapshotBase64 } from '../simulation/tape';
 import { setRandomSeed, getRandomSeed } from '../simulation/rng';
 import { measureEnergyBookkeeping, measurePopulationMetrics, biomassReservoirTotal } from '../simulation/energy-metrics';
 import { snapshotAndResetTelemetry } from '../simulation/telemetry';
+import { countInvalidRuleOpcodes } from '../simulation/tape-health';
 import type { BudgetMode, SuppressionMode } from '../simulation/runtime-config';
 import { initSimulation } from '../simulation/init-simulation';
 
@@ -24,7 +25,7 @@ interface CliArgs {
   outDir: string;
 }
 
-const DEFAULT_SEED = 4237099508;
+const DEFAULT_SEED = 21719667;
 
 function parseArgs(): CliArgs {
   const map = new Map<string, string>();
@@ -76,6 +77,46 @@ function actionEntropy(actions: number[]): number {
   return h;
 }
 
+function mean(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  let s = 0;
+  for (const x of xs) s += x;
+  return s / xs.length;
+}
+
+function percentile(sorted: number[], p01: number): number {
+  if (sorted.length === 0) return 0;
+  const p = Math.max(0, Math.min(1, p01));
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))));
+  return sorted[idx]!;
+}
+
+function pearsonCorr(xs: number[], ys: number[]): number {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 2) return 0;
+  let mx = 0;
+  let my = 0;
+  for (let i = 0; i < n; i++) {
+    mx += xs[i]!;
+    my += ys[i]!;
+  }
+  mx /= n;
+  my /= n;
+  let num = 0;
+  let dx2 = 0;
+  let dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i]! - mx;
+    const dy = ys[i]! - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const den = Math.sqrt(dx2 * dy2);
+  if (den <= 1e-12) return 0;
+  return num / den;
+}
+
 function main() {
   const args = parseArgs();
   setRandomSeed(args.seed);
@@ -117,7 +158,7 @@ function main() {
   }
 
   const rows: string[] = [
-    'tick,orgs,occupied,lineages,topShare,simpson,shannonNats,pielouEven,giniLineage,meanCellsPerOrg,perimeterRatio,avgComponents,budget,measured,drift,tapeCorr,stillbirths,repTry,repOk,birthRepro,birthSplit,splitEvents,splitFrags,splitFragMean,splitSingletonRatio,splitKeepMean,xenoTry,xenoOk,xenoDriveMean,socialCohMean,actionEntropy,noveltyProxy',
+    'tick,orgs,occupied,lineages,topShare,simpson,shannonNats,pielouEven,giniLineage,meanCellsPerOrg,perimeterRatio,avgComponents,budget,measured,drift,tapeCorr,stillbirths,repTry,repOk,birthRepro,birthSplit,splitEvents,splitFrags,splitFragMean,splitSingletonRatio,splitKeepMean,xenoTry,xenoOk,xenoDriveMean,socialCohMean,actionEntropy,noveltyProxy,invOpc_p50,invOpc_p90,invOpc_p99,invOpc_mean,invOpc_corr_age,invOpc_corr_cells,invOpc_corr_energy',
   ];
 
   for (let tick = 1; tick <= args.ticks; tick++) {
@@ -188,6 +229,29 @@ function main() {
       const splitKeepMean = telem.splitEvents > 0 ? telem.splitLargestKeptCells / telem.splitEvents : 0;
       const xenoDriveMean = telem.xenoTransferAttempts > 0 ? telem.xenoTransferDriveSum / telem.xenoTransferAttempts : 0;
       const socialCohMean = telem.socialCohesionSamples > 0 ? telem.socialCohesionSum / telem.socialCohesionSamples : 0;
+
+      // Rule-table health (invalid opcode) vs fitness proxies (snapshot).
+      const inv: number[] = [];
+      const ages: number[] = [];
+      const cellsArr: number[] = [];
+      const energies: number[] = [];
+      for (const org of organisms.organisms.values()) {
+        inv.push(countInvalidRuleOpcodes(org.tape.data).invalid);
+        ages.push(org.age);
+        cellsArr.push(org.cells.size);
+        let e = 0;
+        for (const idx of org.cells) e += world.getCellEnergyByIdx(idx);
+        energies.push(e);
+      }
+      const invSorted = [...inv].sort((a, b) => a - b);
+      const invP50 = percentile(invSorted, 0.5);
+      const invP90 = percentile(invSorted, 0.9);
+      const invP99 = percentile(invSorted, 0.99);
+      const invMean = mean(inv);
+      const invCorrAge = pearsonCorr(inv, ages);
+      const invCorrCells = pearsonCorr(inv, cellsArr);
+      const invCorrEnergy = pearsonCorr(inv, energies);
+
       rows.push(
         [
           tick,
@@ -222,6 +286,13 @@ function main() {
           socialCohMean.toFixed(6),
           aEntropy.toFixed(6),
           noveltyProxy.toFixed(6),
+          invP50.toFixed(6),
+          invP90.toFixed(6),
+          invP99.toFixed(6),
+          invMean.toFixed(6),
+          invCorrAge.toFixed(6),
+          invCorrCells.toFixed(6),
+          invCorrEnergy.toFixed(6),
         ].join(','),
       );
     }

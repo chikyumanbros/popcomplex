@@ -161,13 +161,31 @@ const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN = 0;
  * choose stochastically among the best candidates. This increases branching / exploration.
  */
 const DIV_CHOICE_TOP_K = 4;
-/** Softmax temperature for DIV env-based weights (higher = flatter, more branching). */
-const DIV_CHOICE_TEMP = 6.0;
 /** Small baseline so even low-env empty tiles remain possible. */
 const DIV_CHOICE_BASE_W = 0.15;
-/** Boundary reward: outer cells can feed / interact a bit more (surface-area advantage). */
-const OUTER_EAT_MULT = 1.35;
-const OUTER_ABSORB_MULT = 1.25;
+/**
+ * Environment-gradient-conditioned morphology:
+ * - Flat env → "wormy" exploration (less greedy DIV, stronger interface/absorb bonus).
+ * - Steep env → "planty" tip growth (greedier DIV, stronger boundary feeding bonus).
+ *
+ * This avoids arbitrary mode switches: the same physics yields different morphologies under different env structure.
+ */
+const ENV_GRAD_FLAT = 0.5;
+const ENV_GRAD_STEEP = 6.0;
+const DIV_TEMP_FLAT = 10.0;
+const DIV_TEMP_STEEP = 3.5;
+const OUTER_EAT_MULT_FLAT = 1.20;
+const OUTER_EAT_MULT_STEEP = 1.60;
+const OUTER_ABSORB_MULT_FLAT = 1.35;
+const OUTER_ABSORB_MULT_STEEP = 1.15;
+
+function clamp01(x: number): number {
+  return Math.max(0, Math.min(1, x));
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
 
 /**
  * ABSORB at a heterospecific face: a single continuous interaction.
@@ -279,6 +297,36 @@ export class RuleEvaluator {
 
   private neighborDirs(): [number, number][] {
     return EIGHT_DIRS;
+  }
+
+  private localEnvGradientAt(x: number, y: number): number {
+    const idx = y * GRID_WIDTH + x;
+    const c = this.envEnergy[idx] ?? 0;
+    let localMax = c;
+    for (const [dx, dy] of this.neighborDirs()) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
+      localMax = Math.max(localMax, this.envEnergy[ny * GRID_WIDTH + nx] ?? 0);
+    }
+    return Math.max(0, localMax - c);
+  }
+
+  private envGradient01At(x: number, y: number): number {
+    const g = this.localEnvGradientAt(x, y);
+    const t = (g - ENV_GRAD_FLAT) / Math.max(1e-6, (ENV_GRAD_STEEP - ENV_GRAD_FLAT));
+    return clamp01(t);
+  }
+
+  private isBoundaryCell(cell: CellCtx): boolean {
+    for (const [dx, dy] of this.neighborDirs()) {
+      const nx = cell.x + dx;
+      const ny = cell.y + dy;
+      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) return true;
+      const nOrg = this.world.getOrganismId(nx, ny);
+      if (nOrg !== cell.orgId) return true; // includes empty and foreign
+    }
+    return false;
   }
 
   private safeCellEnergyCapForOrg(orgId: number): number {
@@ -945,16 +993,11 @@ export class RuleEvaluator {
     if (cell.energy < 0.8) return false;
     const vitality = Math.min(1, cell.energy / 5);
     const coordination = Math.min(1, orgSize / 3); // 1-cell=33%, 2-cell=67%, 3+=100%
-    // Boundary reward: surface-area advantage for feeding.
-    let isBoundary = false;
-    for (const [dx, dy] of this.neighborDirs()) {
-      const nx = cell.x + dx;
-      const ny = cell.y + dy;
-      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) { isBoundary = true; break; }
-      const nOrg = this.world.getOrganismId(nx, ny);
-      if (nOrg !== cell.orgId) { isBoundary = true; break; } // includes empty (0) and foreign
-    }
-    const outerMul = isBoundary ? OUTER_EAT_MULT : 1;
+    // Boundary reward: surface-area advantage for feeding; strength depends on env gradient.
+    const grad01 = this.envGradient01At(cell.x, cell.y);
+    const outerMul = this.isBoundaryCell(cell)
+      ? lerp(OUTER_EAT_MULT_FLAT, OUTER_EAT_MULT_STEEP, grad01)
+      : 1;
     // No baseline intake at zero vitality; passiveAbsorb covers the "inert soaking" path.
     const maxEat = maxGather * vitality * specBonus * coordination * outerMul;
     let gathered = 0;
@@ -1279,7 +1322,8 @@ export class RuleEvaluator {
 
     // Softmax over env values (shifted by max for stability), with a small baseline weight.
     const maxEnv = topK[0]!.env;
-    const temp = Math.max(1e-6, DIV_CHOICE_TEMP);
+    const grad01 = this.envGradient01At(cell.x, cell.y);
+    const temp = Math.max(1e-6, lerp(DIV_TEMP_FLAT, DIV_TEMP_STEEP, grad01));
     let sumW = 0;
     const wts = new Float32Array(topK.length);
     for (let i = 0; i < topK.length; i++) {
@@ -1465,14 +1509,11 @@ export class RuleEvaluator {
   }
 
   private actionAbsorb(cell: CellCtx, maxSteal: number): boolean {
-    // Boundary reward: outer tissue has more "interface work" capacity.
-    let boundary = false;
-    for (const [dx, dy] of this.neighborDirs()) {
-      const nx = cell.x + dx, ny = cell.y + dy;
-      if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) { boundary = true; break; }
-      if (this.world.getOrganismId(nx, ny) !== cell.orgId) { boundary = true; break; }
-    }
-    const outerMul = boundary ? OUTER_ABSORB_MULT : 1;
+    // Boundary reward: interface work capacity; stronger in flatter environments.
+    const grad01 = this.envGradient01At(cell.x, cell.y);
+    const outerMul = this.isBoundaryCell(cell)
+      ? lerp(OUTER_ABSORB_MULT_FLAT, OUTER_ABSORB_MULT_STEEP, grad01)
+      : 1;
     const maxStealEff = maxSteal * outerMul;
     for (const [dx, dy] of this.neighborDirs()) {
       const nx = cell.x + dx, ny = cell.y + dy;

@@ -1,0 +1,272 @@
+[
+  {
+    "id": 1,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 65
+  },
+  {
+    "id": 2,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 452
+  },
+  {
+    "id": 3,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 122
+  },
+  {
+    "id": 4,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 239
+  },
+  {
+    "id": 5,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 111
+  },
+  {
+    "id": 6,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 376
+  },
+  {
+    "id": 7,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 97
+  },
+  {
+    "id": 8,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 171
+  },
+  {
+    "id": 9,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 335
+  },
+  {
+    "id": 10,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 513
+  },
+  {
+    "id": 11,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 207
+  },
+  {
+    "id": 12,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 94
+  },
+  {
+    "id": 13,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 99
+  },
+  {
+    "id": 14,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 410
+  },
+  {
+    "id": 15,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 177
+  },
+  {
+    "id": 16,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 1232
+  },
+  {
+    "id": 17,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 116
+  },
+  {
+    "id": 18,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 102
+  },
+  {
+    "id": 19,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 154
+  },
+  {
+    "id": 20,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 286
+  },
+  {
+    "id": 21,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 100
+  },
+  {
+    "id": 22,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 132
+  },
+  {
+    "id": 23,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 201
+  },
+  {
+    "id": 24,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 458
+  },
+  {
+    "id": 25,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 262
+  },
+  {
+    "id": 26,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 232
+  },
+  {
+    "id": 27,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 437
+  },
+  {
+    "id": 28,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 97
+  },
+  {
+    "id": 29,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 140
+  },
+  {
+    "id": 30,
+    "parentId": null,
+    "birthTick": 0,
+    "deathTick": 98
+  },
+  {
+    "id": 31,
+    "parentId": 10,
+    "birthTick": 96,
+    "deathTick": 173
+  },
+  {
+    "id": 32,
+    "parentId": 19,
+    "birthTick": 117,
+    "deathTick": 138
+  },
+  {
+    "id": 33,
+    "parentId": 10,
+    "birthTick": 194,
+    "deathTick": 240
+  },
+  {
+    "id": 34,
+    "parentId": 9,
+    "birthTick": 206,
+    "deathTick": 266
+  },
+  {
+    "id": 35,
+    "parentId": 10,
+    "birthTick": 258,
+    "deathTick": 316
+  },
+  {
+    "id": 36,
+    "parentId": 24,
+    "birthTick": 265,
+    "deathTick": 342
+  },
+  {
+    "id": 37,
+    "parentId": 24,
+    "birthTick": 280,
+    "deathTick": 333
+  },
+  {
+    "id": 38,
+    "parentId": 6,
+    "birthTick": 318,
+    "deathTick": 367
+  },
+  {
+    "id": 39,
+    "parentId": 6,
+    "birthTick": 332,
+    "deathTick": 374
+  },
+  {
+    "id": 40,
+    "parentId": 6,
+    "birthTick": 335,
+    "deathTick": 382
+  },
+  {
+    "id": 41,
+    "parentId": 6,
+    "birthTick": 353,
+    "deathTick": 376
+  },
+  {
+    "id": 42,
+    "parentId": 24,
+    "birthTick": 367,
+    "deathTick": 380
+  },
+  {
+    "id": 43,
+    "parentId": 2,
+    "birthTick": 373,
+    "deathTick": 446
+  },
+  {
+    "id": 44,
+    "parentId": 24,
+    "birthTick": 378,
+    "deathTick": 383
+  },
+  {
+    "id": 45,
+    "parentId": 10,
+    "birthTick": 433,
+    "deathTick": 450
+  }
+]

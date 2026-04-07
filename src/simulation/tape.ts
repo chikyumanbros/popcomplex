@@ -664,9 +664,11 @@ export function createProtoTape(): Tape {
   wr(11, 0b00_01_00_00, 20,  ActionOpcode.DIGEST,      1); // self.e<20 → hungry DIGEST via node1 (SCALE_S)
   wr(12, 0b00_00_11_10, 128, ActionOpcode.EMIT,        8); // outer → EMIT morphA via node8
   wr(13, 0b00_01_10_00, 30,  ActionOpcode.EMIT,        9); // self.morphA<30 → EMIT morphB via node9
-  // Chain bit demo: rule 14 is a chain condition, rule 15 fires only if 14 passes
-  wr(14, 0b01_01_00_00, 15,  ActionOpcode.TAKE,        6); // chain=1, self.e<15 → (chain: condition only)
-  wr(15, 0b00_00_00_11, 0,   ActionOpcode.TAKE,        6); // env.here>0 AND chain → TAKE via node6 (SCALE_E)
+  // Proto stability: keep a couple of "immune maintenance" routes so rule opcodes are less likely to stay broken.
+  //  - Small clusters can still REPAIR occasionally (not only when neigh.same>2).
+  //  - Old lineages get a periodic maintenance drive even if their behavior drifts.
+  wr(14, 0b00_00_00_10, 0,   ActionOpcode.REPAIR,      1); // neigh.same>0 → REPAIR
+  wr(15, 0b00_00_10_01, 220, ActionOpcode.REPAIR,      1); // org.age>220 → REPAIR
 
   // === NN params (bytes 128-255) — fixed, not random (reproducible normal starter)
   let s = PROTO_TAPE_NN_SEED | 0;

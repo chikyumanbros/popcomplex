@@ -33,6 +33,39 @@ function percentile(sorted: number[], p01: number): number {
   return sorted[idx]!;
 }
 
+function mean(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  let s = 0;
+  for (const x of xs) s += x;
+  return s / xs.length;
+}
+
+function pearsonCorr(xs: number[], ys: number[]): number {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 2) return 0;
+  let mx = 0;
+  let my = 0;
+  for (let i = 0; i < n; i++) {
+    mx += xs[i]!;
+    my += ys[i]!;
+  }
+  mx /= n;
+  my /= n;
+  let num = 0;
+  let dx2 = 0;
+  let dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i]! - mx;
+    const dy = ys[i]! - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const den = Math.sqrt(dx2 * dy2);
+  if (den <= 1e-12) return 0;
+  return num / den;
+}
+
 function tapeHexDump(data: Uint8Array): string {
   const labels: Record<number, string> = {
     0: '── data ──',
@@ -96,6 +129,9 @@ interface OrgProfile {
   centerY: number;
   nnOutput: Float32Array;
   nnDominant: MoodIdx;
+  invalidOpcode: number;
+  validRules: number;
+  nopRules: number;
 }
 
 function summarizeOrganism(world: World, org: Organism): OrgProfile {
@@ -155,6 +191,7 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
   const bboxW = Math.max(1, maxX - minX + 1);
   const bboxH = Math.max(1, maxY - minY + 1);
   const nnDom = Math.max(0, Math.min(3, org.nnDominant)) as MoodIdx;
+  const rules = countInvalidRuleOpcodes(org.tape.data);
 
   return {
     id: org.id,
@@ -177,6 +214,9 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
     centerY: cy / n,
     nnOutput: org.nnOutput,
     nnDominant: nnDom,
+    invalidOpcode: rules.invalid,
+    validRules: rules.valid,
+    nopRules: rules.nop,
   };
 }
 
@@ -358,6 +398,54 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
         `p99=${percentile(invalidPerOrg, 0.99).toFixed(0)} ` +
         `max=${percentile(invalidPerOrg, 1.00).toFixed(0)} (out of 16)`,
     );
+  }
+  if (profiles.length >= 4) {
+    const inv = profiles.map((p) => p.invalidOpcode);
+    const age = profiles.map((p) => p.age);
+    const cellsArr = profiles.map((p) => p.cells);
+    const biomass = profiles.map((p) => p.biomass);
+    const ePerCell = profiles.map((p) => p.meanEnergy);
+    const sPerCell = profiles.map((p) => p.meanStomach);
+    const reproCd = profiles.map((p) => (organisms.get(p.id)?.reproduceCooldown ?? 0));
+
+    const invSorted = [...inv].sort((a, b) => a - b);
+    const p25 = percentile(invSorted, 0.25);
+    const p75 = percentile(invSorted, 0.75);
+    const low = profiles.filter((p) => p.invalidOpcode <= p25);
+    const high = profiles.filter((p) => p.invalidOpcode >= p75);
+
+    const lowAge = mean(low.map((p) => p.age));
+    const highAge = mean(high.map((p) => p.age));
+    const lowCells = mean(low.map((p) => p.cells));
+    const highCells = mean(high.map((p) => p.cells));
+
+    lines.push(
+      `- **invalidOpcode correlations (Pearson r)**: ` +
+        `age=${pearsonCorr(inv, age).toFixed(3)} ` +
+        `cells=${pearsonCorr(inv, cellsArr).toFixed(3)} ` +
+        `biomass=${pearsonCorr(inv, biomass).toFixed(3)} ` +
+        `E/cell=${pearsonCorr(inv, ePerCell).toFixed(3)} ` +
+        `S/cell=${pearsonCorr(inv, sPerCell).toFixed(3)} ` +
+        `reproCd=${pearsonCorr(inv, reproCd).toFixed(3)} (snapshot-only)`,
+    );
+    lines.push(
+      `- **invalidOpcode buckets**: ` +
+        `p25=${p25.toFixed(0)} p75=${p75.toFixed(0)} ` +
+        `low(n=${low.length}) meanAge=${lowAge.toFixed(1)} meanCells=${lowCells.toFixed(2)} | ` +
+        `high(n=${high.length}) meanAge=${highAge.toFixed(1)} meanCells=${highCells.toFixed(2)}`,
+    );
+    const oldestHigh = [...high].sort((a, b) => b.age - a.age).slice(0, 3);
+    const youngestHigh = [...high].sort((a, b) => a.age - b.age).slice(0, 3);
+    if (oldestHigh.length > 0) {
+      lines.push(
+        `- **invalidOpcode high: oldest**: ${oldestHigh.map((p) => `#${p.id}(inv=${p.invalidOpcode},age=${p.age},cells=${p.cells})`).join(' | ')}`,
+      );
+    }
+    if (youngestHigh.length > 0) {
+      lines.push(
+        `- **invalidOpcode high: youngest**: ${youngestHigh.map((p) => `#${p.id}(inv=${p.invalidOpcode},age=${p.age},cells=${p.cells})`).join(' | ')}`,
+      );
+    }
   }
   lines.push(
     `- **digest module intact**: orgs=${digestIntactOrgs}/${Math.max(1, orgList.length)} ` +
