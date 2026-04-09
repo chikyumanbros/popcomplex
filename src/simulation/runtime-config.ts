@@ -1,7 +1,7 @@
 export type BudgetMode = 'global' | 'local';
 export type SuppressionMode = 'on' | 'off';
 /** Default URL `seed=` and headless default; design-gate scenarios use this among others. */
-export const DEFAULT_RUNTIME_SEED = 3418996282;
+export const DEFAULT_RUNTIME_SEED = 1658646678;
 
 export interface RuntimeConfig {
   seed: number;

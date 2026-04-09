@@ -305,7 +305,15 @@ export class EcologyTrendChart {
 
   private resize(): void {
     const parent = this.canvas.parentElement;
-    let w = parent ? parent.clientWidth : 0;
+    let w = 0;
+    if (parent) {
+      // `clientWidth` includes padding; the canvas lives inside that padding box and would overflow.
+      // Subtract horizontal padding so the canvas fits the content box exactly.
+      const cs = window.getComputedStyle(parent);
+      const padL = Number.parseFloat(cs.paddingLeft || '0') || 0;
+      const padR = Number.parseFloat(cs.paddingRight || '0') || 0;
+      w = Math.max(0, parent.clientWidth - padL - padR);
+    }
     if (w < 48) w = 240;
     const cssH = 168;
     const pxr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;

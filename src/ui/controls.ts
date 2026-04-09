@@ -29,11 +29,21 @@ export interface UIState {
   stepRequested: boolean;
 }
 
-/** Sync all view-mode labels (header pill, sidebar banner, stats row). Call each frame from `updateStats`. */
-export function setViewModeUi(viewMode: number) {
+function viewModeInfo(viewMode: number): { m: number; name: string; idx: string } {
   const m = ((viewMode % VIEW_MODE_COUNT) + VIEW_MODE_COUNT) % VIEW_MODE_COUNT;
   const name = VIEW_MODE_NAMES[m] ?? '?';
   const idx = `${m + 1}/${VIEW_MODE_COUNT}`;
+  return { m, name, idx };
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  const t = target as HTMLElement | null;
+  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+}
+
+/** Sync all view-mode labels (header pill, sidebar banner, stats row). Call each frame from `updateStats`. */
+export function setViewModeUi(viewMode: number) {
+  const { name, idx } = viewModeInfo(viewMode);
   const hdr = document.getElementById('header-view-mode');
   if (hdr) {
     hdr.textContent = `View ${idx} — ${name}`;
@@ -143,33 +153,40 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
     </div>
   `;
 
-  document.getElementById('btn-pause')!.addEventListener('click', () => {
+  const pauseBtn = document.getElementById('btn-pause') as HTMLButtonElement;
+  const stepBtn = document.getElementById('btn-step') as HTMLButtonElement;
+  const speedEl = document.getElementById('speed') as HTMLInputElement;
+  const speedValEl = document.getElementById('speed-val');
+  const seedInput = document.getElementById('run-seed') as HTMLInputElement;
+  const seedApplyBtn = document.getElementById('btn-seed-apply') as HTMLButtonElement;
+  const seedRandomBtn = document.getElementById('btn-seed-random') as HTMLButtonElement;
+  const restartBtn = document.getElementById('btn-restart') as HTMLButtonElement;
+
+  pauseBtn.addEventListener('click', () => {
     state.paused = !state.paused;
-    document.getElementById('btn-pause')!.textContent = state.paused ? 'Resume' : 'Pause';
+    pauseBtn.textContent = state.paused ? 'Resume' : 'Pause';
   });
 
   function togglePause(): void {
     state.paused = !state.paused;
-    document.getElementById('btn-pause')!.textContent = state.paused ? 'Resume' : 'Pause';
+    pauseBtn.textContent = state.paused ? 'Resume' : 'Pause';
   }
 
-  document.getElementById('btn-step')!.addEventListener('click', () => {
+  stepBtn.addEventListener('click', () => {
     state.stepRequested = true;
   });
 
-  document.getElementById('speed')!.addEventListener('input', (e) => {
+  speedEl.addEventListener('input', (e) => {
     state.speed = parseInt((e.target as HTMLInputElement).value);
-    document.getElementById('speed-val')!.textContent = String(state.speed).padStart(2, ' ');
+    if (speedValEl) speedValEl.textContent = String(state.speed).padStart(2, ' ');
   });
-
-  const seedInput = document.getElementById('run-seed') as HTMLInputElement;
 
   function applySeedFromInput(): void {
     reloadPageWithSeed(Number(seedInput.value));
   }
 
-  document.getElementById('btn-seed-apply')!.addEventListener('click', applySeedFromInput);
-  document.getElementById('btn-seed-random')!.addEventListener('click', () => {
+  seedApplyBtn.addEventListener('click', applySeedFromInput);
+  seedRandomBtn.addEventListener('click', () => {
     reloadPageWithRandomSeed();
   });
   seedInput.addEventListener('keydown', (e) => {
@@ -179,7 +196,7 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
     }
   });
 
-  document.getElementById('btn-restart')!.addEventListener('click', () => {
+  restartBtn.addEventListener('click', () => {
     window.location.reload();
   });
 
@@ -222,27 +239,23 @@ export function createUI(canvas: HTMLCanvasElement, initialSeed: number): UIStat
   });
 
   window.addEventListener('keydown', (e) => {
+    if (isTypingTarget(e.target)) return;
+
     if (e.key === ' ') {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       e.preventDefault();
       togglePause();
       return;
     }
-    if (e.key !== 'v' && e.key !== 'V') return;
-    const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-    e.preventDefault();
-    state.viewMode = (state.viewMode + 1) % VIEW_MODE_COUNT;
-    setViewModeUi(state.viewMode);
-  });
-
-  window.addEventListener('keydown', (e) => {
-    if (e.key !== 'h' && e.key !== 'H') return;
-    const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-    e.preventDefault();
-    state.componentHighlight = !state.componentHighlight;
+    if (e.key === 'v' || e.key === 'V') {
+      e.preventDefault();
+      state.viewMode = (state.viewMode + 1) % VIEW_MODE_COUNT;
+      setViewModeUi(state.viewMode);
+      return;
+    }
+    if (e.key === 'h' || e.key === 'H') {
+      e.preventDefault();
+      state.componentHighlight = !state.componentHighlight;
+    }
   });
 
   setViewModeUi(state.viewMode);
@@ -276,8 +289,6 @@ export function updateStats(
   setStat('stat-meas', `${(measured / 1e6).toFixed(3)}M`);
   setStat('stat-drift', drift >= 0 ? `+${drift.toFixed(2)}` : drift.toFixed(2));
   setViewModeUi(viewMode);
-  const m = ((viewMode % VIEW_MODE_COUNT) + VIEW_MODE_COUNT) % VIEW_MODE_COUNT;
-  const name = VIEW_MODE_NAMES[m] ?? '?';
-  const idx = `${m + 1}/${VIEW_MODE_COUNT}`;
+  const { name, idx } = viewModeInfo(viewMode);
   setStat('stat-view', `${name} (${idx}) z=${viewZoom.toFixed(2)}`);
 }
