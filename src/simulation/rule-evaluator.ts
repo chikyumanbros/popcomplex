@@ -243,6 +243,10 @@ interface RuleEvaluatorOptions {
   suppressionMode?: SuppressionMode;
   metabolicScale?: number;
   distressFireChanceScale?: number;
+  /** Optional coupling (0..1) for gating NN input sensitivity by reactive stress proxy. Default 0 for baseline stability. */
+  stressNnMix?: number;
+  /** Optional coupling (0..1) for gating NN input sensitivity by territorial-claim proxy. Default 0. */
+  claimNnMix?: number;
 }
 
 /**
@@ -272,6 +276,8 @@ export class RuleEvaluator {
   private suppressionMode: SuppressionMode;
   private metabolicScale: number;
   private distressFireChanceScale: number;
+  private stressNnMix: number;
+  private claimNnMix: number;
   private jamTicks: Uint8Array;
   private groupSizeCache: Map<number, number> = new Map();
   private static readonly BROKEN_CAP_FALLBACK = 0;
@@ -292,6 +298,8 @@ export class RuleEvaluator {
     this.suppressionMode = opts.suppressionMode ?? 'on';
     this.metabolicScale = opts.metabolicScale ?? 1;
     this.distressFireChanceScale = opts.distressFireChanceScale ?? 1;
+    this.stressNnMix = clamp01(opts.stressNnMix ?? 0);
+    this.claimNnMix = clamp01(opts.claimNnMix ?? 0);
     this.jamTicks = new Uint8Array(TOTAL_CELLS);
   }
 
@@ -530,10 +538,12 @@ export class RuleEvaluator {
       let foreignNeighbors = 0;
       let markerDominance = 0;
       let envGradient = 0;
+      let rotMax = 0;
       for (const idx of org.cells) {
         totalE += this.world.getCellEnergyByIdx(idx);
         totalS += this.world.getStomachByIdx(idx);
         totalEnv += this.envEnergy[idx];
+        rotMax = Math.max(rotMax, this.world.rot[idx] ?? 0);
 
         const x = idx % GRID_WIDTH;
         const y = (idx - x) / GRID_WIDTH;
@@ -562,16 +572,69 @@ export class RuleEvaluator {
 
       // 8 inputs: avg energy, avg stomach, avg env, org size, boundary ratio,
       // foreign contact ratio, marker dominance, local env gradient.
-      org.nnInput[0] = Math.min(1, (totalE / n) / 255);
+      const avgEnergy01 = Math.min(1, (totalE / n) / 255);
+      const boundary01 = Math.min(1, boundaryCells / n);
+      const foreign01 = Math.min(1, foreignNeighbors / (n * dirsLen));
+      const marker01 = Math.min(1, markerDominance / n);
+      const grad01 = Math.min(1, (envGradient / n) / 20);
+
+      // Instant stress proxy: combines known stressors into a single reactive scalar.
+      // Weighting is intentionally conservative; evolved weights still dominate behaviour.
+      const stress01 = clamp01(
+        0.45 * (1 - avgEnergy01) +
+        0.25 * foreign01 +
+        0.20 * boundary01 +
+        0.10 * rotMax,
+      );
+      org.nnStress01 = stress01;
+
+      // Instant territorial-claim proxy: high when local marker dominance is strong, foreign contact is low,
+      // and the local gradient is weak (less pull to roam). This is the “stay / insist” counterpart to stress.
+      const claim01 = clamp01(
+        0.65 * marker01 +
+        0.20 * (1 - foreign01) +
+        0.15 * (1 - grad01),
+      );
+      org.nnClaim01 = claim01;
+
+      org.nnInput[0] = avgEnergy01;
       org.nnInput[1] = Math.min(1, (totalS / n) / 255);
       org.nnInput[2] = Math.min(1, (totalEnv / n) / 50);
       org.nnInput[3] = Math.min(1, n / 64);
-      org.nnInput[4] = Math.min(1, boundaryCells / n);
-      org.nnInput[5] = Math.min(1, foreignNeighbors / (n * dirsLen));
-      org.nnInput[6] = Math.min(1, markerDominance / n);
-      org.nnInput[7] = Math.min(1, (envGradient / n) / 20);
+      org.nnInput[4] = boundary01;
+      org.nnInput[5] = foreign01;
+      org.nnInput[6] = marker01;
+      org.nnInput[7] = grad01;
 
-      org.nnOutput = org.nn.forward(org.nnInput);
+      // Stress→NN coupling (recommended): gate *sensitivity* (input gains) rather than mixing meanings of inputs.
+      // `OrganismManager.syncNeuralWeightsFromTape()` runs every tick, so these gain tweaks are ephemeral.
+      if (this.stressNnMix > 0) {
+        const mix = this.stressNnMix;
+        const s = stress01;
+        const clampGain = (g: number) => Math.max(0.10, Math.min(3.00, g));
+
+        // Index mapping (see tape-nn docs / updateNeuralNetworks):
+        // 0 energy, 1 stomach, 2 env, 3 size, 4 boundary, 5 foreign, 6 marker, 7 gradient
+        // Under stress: downweight "energy optimism", upweight "threat/edge/gradient" reactivity a bit.
+        org.nn.inputGain[0] = clampGain(org.nn.inputGain[0] * (1 - 0.35 * mix * s));
+        org.nn.inputGain[4] = clampGain(org.nn.inputGain[4] * (1 + 0.55 * mix * s));
+        org.nn.inputGain[5] = clampGain(org.nn.inputGain[5] * (1 + 0.70 * mix * s));
+        org.nn.inputGain[7] = clampGain(org.nn.inputGain[7] * (1 + 0.45 * mix * s));
+      }
+
+      // Claim→NN coupling: bias attention toward “home marker” and away from roaming triggers.
+      if (this.claimNnMix > 0) {
+        const mix = this.claimNnMix;
+        const c = claim01;
+        const clampGain = (g: number) => Math.max(0.10, Math.min(3.00, g));
+
+        // Under claim: upweight marker; downweight gradient and foreign-contact sensitivity a bit.
+        org.nn.inputGain[6] = clampGain(org.nn.inputGain[6] * (1 + 0.70 * mix * c));
+        org.nn.inputGain[7] = clampGain(org.nn.inputGain[7] * (1 - 0.55 * mix * c));
+        org.nn.inputGain[5] = clampGain(org.nn.inputGain[5] * (1 - 0.35 * mix * c));
+      }
+
+      org.nn.forward(org.nnInput, org.nnOutput, org.nnPrimitives);
 
       let best = 0;
       for (let i = 1; i < NN_OUTPUT; i++) {

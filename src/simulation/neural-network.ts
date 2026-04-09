@@ -41,37 +41,41 @@ export class NeuralNetwork {
     }
   }
 
-  forward(input: Float32Array): Float32Array {
-    const hidden = new Float32Array(this.hiddenSize);
+  /**
+   * Writes softmax mood probabilities into `moodOut` and post-tanh hidden activations into `primitiveOut`
+   * (same vector the output layer reads; interpretable as learned primitive drives before they combine into mood).
+   */
+  forward(input: Float32Array, moodOut: Float32Array, primitiveOut: Float32Array): void {
+    if (moodOut.length < this.outputSize || primitiveOut.length < this.hiddenSize) {
+      throw new Error('NeuralNetwork.forward: moodOut / primitiveOut too small');
+    }
+
     for (let h = 0; h < this.hiddenSize; h++) {
       let sum = 0;
       for (let i = 0; i < this.inputSize; i++) {
         sum += (input[i] * this.inputGain[i]) * this.weightsIH[i * this.hiddenSize + h];
       }
       sum += this.biasH[h];
-      hidden[h] = Math.tanh(sum);
+      primitiveOut[h] = Math.tanh(sum);
     }
 
-    const output = new Float32Array(this.outputSize);
+    // Match pre-refactor order: accumulate W·p first, then add bias (FP rounding differs if bias is folded in first).
     for (let o = 0; o < this.outputSize; o++) {
       let sum = 0;
       for (let h = 0; h < this.hiddenSize; h++) {
-        sum += hidden[h] * this.weightsHO[h * this.outputSize + o];
+        sum += primitiveOut[h] * this.weightsHO[h * this.outputSize + o];
       }
       sum += this.biasO[o];
-      output[o] = sum;
+      moodOut[o] = sum;
     }
 
-    // Softmax
     let maxVal = -Infinity;
-    for (let i = 0; i < output.length; i++) if (output[i] > maxVal) maxVal = output[i];
+    for (let i = 0; i < this.outputSize; i++) if (moodOut[i] > maxVal) maxVal = moodOut[i];
     let expSum = 0;
-    for (let i = 0; i < output.length; i++) {
-      output[i] = Math.exp(output[i] - maxVal);
-      expSum += output[i];
+    for (let i = 0; i < this.outputSize; i++) {
+      moodOut[i] = Math.exp(moodOut[i] - maxVal);
+      expSum += moodOut[i];
     }
-    for (let i = 0; i < output.length; i++) output[i] /= expSum;
-
-    return output;
+    for (let i = 0; i < this.outputSize; i++) moodOut[i] /= expSum;
   }
 }

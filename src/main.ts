@@ -39,7 +39,7 @@ async function main() {
   const cfg = readRuntimeConfigFromUrl();
   setRandomSeed(cfg.seed);
   console.log(
-    `[Run] seed:${getRandomSeed()} budget:${cfg.budgetMode} suppression:${cfg.suppressionMode} spawnEnergy:${cfg.spawnInitialEnergy} metabolicScale:${cfg.metabolicScale} distressScale:${cfg.distressFireChanceScale} multiOrigin:${cfg.multiOrigin} culture:${cfg.culture}`,
+    `[Run] seed:${getRandomSeed()} budget:${cfg.budgetMode} suppression:${cfg.suppressionMode} spawnEnergy:${cfg.spawnInitialEnergy} metabolicScale:${cfg.metabolicScale} distressScale:${cfg.distressFireChanceScale} stressMix:${cfg.stressNnMix} claimMix:${cfg.claimNnMix} multiOrigin:${cfg.multiOrigin} culture:${cfg.culture}`,
   );
 
   const canvas = document.getElementById('canvas') as HTMLCanvasElement;
@@ -64,6 +64,8 @@ async function main() {
     suppressionMode: cfg.suppressionMode,
     metabolicScale: cfg.metabolicScale,
     distressFireChanceScale: cfg.distressFireChanceScale,
+    stressNnMix: cfg.stressNnMix,
+    claimNnMix: cfg.claimNnMix,
   });
 
   // Canonical init: env field + (culture/multiOrigin) shaping + inoculation.

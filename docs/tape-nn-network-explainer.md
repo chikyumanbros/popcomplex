@@ -85,6 +85,10 @@ Built per organism in `RuleEvaluator.updateNeuralNetworks()`:
 
 Outputs form a probability distribution; argmax is stored as `nnDominant` and reused in rule conditions.
 
+### Primitives (hidden tanh, `nnPrimitives`)
+
+After the hidden layer, each organism keeps the **post-tanh hidden vector** (`p0..p{H-1}` in UI / handoff). These are **learned primitive drives**: they linearly mix (via `weightsHO` + `biasO`) into the four mood logits before softmax. Axis labels are **not** fixed semantics (no guaranteed “fear vs explore” mapping); they exist so observers and tooling can reason about *how* a surface mood arises from internal state.
+
 ---
 
 ## 3) Network Structure (Cell Coupling and Signals)

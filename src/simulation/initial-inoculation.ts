@@ -18,7 +18,7 @@ export const DEFAULT_TRICLADE_SITES: InoculationSite[] = [
   { x: 200, y: 56, cladeAux: 1 },
   { x: 128, y: 192, cladeAux: 2 },
 ];
-export const DEFAULT_INOCULATION_PER_SITE = 10;
+export const DEFAULT_INOCULATION_PER_SITE = 16;
 const DEFAULT_SITE_SPAWN_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [0, 0],
   [1, 0],
@@ -30,6 +30,12 @@ const DEFAULT_SITE_SPAWN_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [-1, 1],
   [-1, -1],
   [2, 0],
+  [-2, 0],
+  [0, 2],
+  [0, -2],
+  [2, 1],
+  [2, -1],
+  [-2, 1],
 ];
 
 function clampSpawnCoord(v: number, max: number): number {

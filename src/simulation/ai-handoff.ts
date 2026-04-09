@@ -18,13 +18,17 @@ import {
   CHANNEL_SWAP_BASE_PROB,
 } from './transcription';
 import { U32_PER_CELL, type World } from './world';
-import { NN_MOVE, type OrganismManager, type Organism } from './organism';
+import { NN_MOVE, NN_PRIMITIVE_LABELS, type OrganismManager, type Organism } from './organism';
 import type { RuleEvaluator } from './rule-evaluator';
 import type { UIState } from '../ui/controls';
 import { measureEnergyBookkeeping, biomassReservoirTotal, type EnergyBookkeeping } from './energy-metrics';
 import { getRandomSeed } from './rng';
 import { countInvalidRuleOpcodes } from './tape-health';
 import type { TelemetrySnapshot } from './telemetry';
+
+function formatPrimitivesLine(prim: Float32Array): string {
+  return NN_PRIMITIVE_LABELS.map((label, i) => `${label}:${prim[i]!.toFixed(2)}`).join(' ');
+}
 
 function percentile(sorted: number[], p01: number): number {
   if (sorted.length === 0) return 0;
@@ -128,6 +132,12 @@ interface OrgProfile {
   centerX: number;
   centerY: number;
   nnOutput: Float32Array;
+  /** Hidden tanh primitive axes (length = NN_HIDDEN); semantics are evolved. */
+  nnPrimitives: Float32Array;
+  /** Instant stress proxy (0..1) mixed into NN inputs. */
+  nnStress01: number;
+  /** Instant territorial-claim proxy (0..1) used to gate NN input sensitivity. */
+  nnClaim01: number;
   nnDominant: MoodIdx;
   invalidOpcode: number;
   validRules: number;
@@ -248,6 +258,9 @@ function summarizeOrganism(world: World, org: Organism): OrgProfile {
     centerX: cx / n,
     centerY: cy / n,
     nnOutput: org.nnOutput,
+    nnPrimitives: org.nnPrimitives,
+    nnStress01: org.nnStress01,
+    nnClaim01: org.nnClaim01,
     nnDominant: nnDom,
     invalidOpcode: rules.invalid,
     validRules: rules.valid,
@@ -534,6 +547,9 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     `- **NN tape decode**: each parameter = \`(u16_be(hi,lo) - ${NN_TAPE_WEIGHT_CENTER}) / ${NN_TAPE_WEIGHT_SCALE}\` (see \`decodeNNWeightBytes\` / \`getNNWeights\`). NN bytes **128–255** share the same transcribe + degradation path as rules/data — splitting NN to another buffer would isolate “mood” drift from discrete rules at implementation cost.`,
   );
   lines.push(
+    '- **NN mood vs primitives**: 8→H tanh hidden values \`p0..p{H-1}\` are **primitive drives** (learned axes, no fixed human meaning). Mood logits are \`W·p + b\`, then **softmax → 4** surface moods (eat/grow/move/conserve). Rules still key off the **dominant surface mood** and its probability.',
+  );
+  lines.push(
     `- **Degradation**: XOR one bit per hit; probability × \`tapeByteDegradationSensitivity(i)\` (\`TAPE_DEGRAD_SENS_*\`) — replication key, rule opcodes, maxCells, refractory, NN band are tuned sturdier than average literals.`,
   );
   lines.push(
@@ -573,7 +589,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     lines.push(
       `- **#${org.id}** cells=${org.cells.size} age=${org.age} maxCells=${org.tape.getMaxCells()} ` +
         `reproCd=${Math.max(0, Math.round(org.reproduceCooldown))} E=${e.toFixed(1)} S=${s.toFixed(1)} ` +
-        `nnDom=${org.nnDominant} (${moods}) tapeDegΣ=${degSum} ` +
+        `nnDom=${org.nnDominant} (${moods}) prim=${formatPrimitivesLine(org.nnPrimitives)} stress=${org.nnStress01.toFixed(2)} claim=${org.nnClaim01.toFixed(2)} tapeDegΣ=${degSum} ` +
         `rules: valid=${rules.valid} nop=${rules.nop} invalidOpcode=${rules.invalid} ` +
         `state=${state} live=${live.toFixed(2)} rotMax=${rotMx.toFixed(2)} rotMaxDead=${rotDead.toFixed(2)}`,
     );
@@ -599,7 +615,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
     lines.push(
       `- **#${p.id}** liveCells≈${item.liveCells.toFixed(1)} cells=${p.cells} age=${p.age} maxCells=${org.tape.getMaxCells()} ` +
         `reproCd=${Math.max(0, Math.round(org.reproduceCooldown))} E=${p.energy.toFixed(1)} S=${p.stomach.toFixed(1)} ` +
-        `nnDom=${org.nnDominant} (${moods}) tapeDegΣ=${degSum} ` +
+        `nnDom=${org.nnDominant} (${moods}) prim=${formatPrimitivesLine(org.nnPrimitives)} stress=${org.nnStress01.toFixed(2)} claim=${org.nnClaim01.toFixed(2)} tapeDegΣ=${degSum} ` +
         `rules: valid=${rules.valid} nop=${rules.nop} invalidOpcode=${rules.invalid} ` +
         `state=${state} live=${p.liveCellRatio.toFixed(2)} rotMax=${p.rotMax.toFixed(2)} rotMaxDead=${p.rotMaxDead.toFixed(2)}`,
     );
@@ -640,7 +656,7 @@ export function buildAIHandoffMarkdown(input: AIHandoffInput): string {
       const state = softOrgStateLabel(p);
       lines.push(
         `- **${item.title} → #${p.id}** face=0x${p.lineage.toString(16).padStart(6, '0')} genetic=0x${p.geneticKinTag.toString(16).padStart(6, '0')} ` +
-          `cells=${p.cells} age=${p.age} mood=${MOOD_NAMES[p.nnDominant]} ` +
+          `cells=${p.cells} age=${p.age} mood=${MOOD_NAMES[p.nnDominant]} prim=${formatPrimitivesLine(p.nnPrimitives)} stress=${p.nnStress01.toFixed(2)} claim=${p.nnClaim01.toFixed(2)} ` +
           `biomass=${p.biomass.toFixed(1)} E/cell=${p.meanEnergy.toFixed(2)} S/cell=${p.meanStomach.toFixed(2)} ` +
           `markers[e,d,s,m]=[${p.meanMarkers.map((v) => v.toFixed(1)).join(', ')}] ` +
           `boundary=${p.boundaryRatio.toFixed(3)} compact=${p.compactness.toFixed(3)} ` +

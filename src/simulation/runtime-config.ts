@@ -10,6 +10,10 @@ export interface RuntimeConfig {
   spawnInitialEnergy: number;
   metabolicScale: number;
   distressFireChanceScale: number;
+  /** 0..1: how much reactive stress gates NN input sensitivity (default ON, mild). */
+  stressNnMix: number;
+  /** 0..1: how much instant territorial-claim proxy gates NN input sensitivity (default ON, mild). */
+  claimNnMix: number;
   /**
    * Inoculation mode: when true, spawn multiple separated protos (triclad).
    * In the browser, you can reproduce headless-like init with `?culture=0&multiOrigin=1`.
@@ -79,6 +83,11 @@ export function readRuntimeConfigFromUrl(): RuntimeConfig {
     spawnInitialEnergy: parsePositiveFinite(qs.get('spawnEnergy'), 60),
     metabolicScale: parsePositiveFinite(qs.get('metabolicScale'), 1),
     distressFireChanceScale: parsePositiveFinite(qs.get('distressScale'), 1),
+    // Default ON: mild coupling makes the NN react to existing stressors without changing tape layout.
+    // Use `?stressMix=0` to disable and recover baseline behaviour.
+    stressNnMix: Math.max(0, Math.min(1, Number(qs.get('stressMix') ?? 0.2) || 0)),
+    // Default ON: mild coupling for “territorial fixation / claim” proxy (use `?claimMix=0` to disable).
+    claimNnMix: Math.max(0, Math.min(1, Number(qs.get('claimMix') ?? 0.2) || 0)),
     multiOrigin: parseQueryFlag(qs.get('multiOrigin'), false),
     culture: parseQueryFlag(qs.get('culture'), true),
   };

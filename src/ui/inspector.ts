@@ -1,4 +1,4 @@
-import type { OrganismManager } from '../simulation/organism';
+import { NN_PRIMITIVE_LABELS, type OrganismManager } from '../simulation/organism';
 import type { World } from '../simulation/world';
 import { U32_PER_CELL } from '../simulation/world';
 import type { UIState } from './controls';
@@ -72,6 +72,11 @@ export function setupInspector(
     const nnStr = moodLabels
       .map((m, i) => `${m}:${nnOut[i].toFixed(2).padStart(5, '\u2007')}`)
       .join(' ');
+    const primStr = NN_PRIMITIVE_LABELS.map(
+      (label, i) => `${label}:${org.nnPrimitives[i]!.toFixed(2).padStart(5, '\u2007')}`,
+    ).join(' ');
+    const stressStr = `stress:${org.nnStress01.toFixed(2).padStart(5, '\u2007')}`;
+    const claimStr = `claim:${org.nnClaim01.toFixed(2).padStart(5, '\u2007')}`;
 
     const [rr0, rr1, rr2] = world.getRuleRoutesByIdx(idx);
     const routesStr = `routes ${String(rr0).padStart(2, '\u2007')},${String(rr1).padStart(2, '\u2007')},${String(rr2).padStart(2, '\u2007')}`;
@@ -117,7 +122,10 @@ export function setupInspector(
       <div class="ins-markers">
         Markers  eat${mEatS}  dig${mDigestS}  sig${mSignalS}  move${mMoveS}
       </div>
-      <div class="nn-bias">NN  ${nnStr}</div>
+      <div class="nn-bias">NN mood ${nnStr}</div>
+      <div class="nn-bias dim">prim ${primStr} <span class="dim">(tanh hidden; learned axes)</span></div>
+      <div class="nn-bias dim">${stressStr} <span class="dim">(reactive proxy)</span></div>
+      <div class="nn-bias dim">${claimStr} <span class="dim">(territorial proxy)</span></div>
       <div class="nn-bias">${routesStr}</div>
       <div class="nn-bias">state ${stateLabel} · ${rotStr}</div>
       ${formatTapeRulesInspectorHtml(org.tape)}
