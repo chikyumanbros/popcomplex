@@ -9,6 +9,7 @@ import { buildAIHandoffMarkdown, buildAIHandoffPrompt, type AIHandoffPromptPrese
 import { createUI, updateStats, type UIState } from './ui/controls';
 import { EcologyTrendChart } from './ui/ecology-chart';
 import { setupInspector } from './ui/inspector';
+import { OrgPortrait } from './ui/org-portrait';
 import { StatsTracker } from './ui/stats';
 import { GRID_WIDTH, GRID_HEIGHT } from './simulation/constants';
 import {
@@ -116,6 +117,8 @@ async function main() {
     }
   }
 
+  const portrait = new OrgPortrait();
+
   setupInspector(canvas, world, organisms, ui, (idx, orgId) => {
     selectedComponentSeedIdx = idx;
     selectedComponentOrgId = orgId;
@@ -123,6 +126,9 @@ async function main() {
     if (ui.componentHighlight) {
       gpu.device.queue.writeBuffer(buffers.componentMask, 0, componentMaskCpu.buffer);
     }
+    // Open Lenia portrait for the selected organism.
+    const org = organisms.get(orgId);
+    if (org) portrait.open(org, world);
   });
 
   // Budget was snapped inside initSimulation (before inoculation withdraw/spawn).
@@ -343,6 +349,13 @@ async function main() {
     const encoder = gpu!.device.createCommandEncoder({ label: 'render' });
     renderer.draw(encoder, 0);
     gpu!.device.queue.submit([encoder.finish()]);
+
+    // Update Lenia portrait: sync NN color state and auto-close if org died.
+    if (portrait.isOpen) {
+      portrait.tick(organisms);
+      const selOrg = selectedComponentOrgId !== null ? organisms.get(selectedComponentOrgId) : null;
+      if (selOrg) portrait.updateNNState(selOrg);
+    }
 
     refreshBookkeepingAndStats(advanced);
     maybeLogWorldState();
