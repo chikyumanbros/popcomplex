@@ -14,6 +14,10 @@ export interface DigestPhaseDeps {
   digestionHeatLoss: number;
   digestNetworkBase: number;
   digestNetworkCoeff: number;
+  /** Fraction of each digested unit that accumulates as intracellular toxin (dimensionless). */
+  toxinDigestRate: number;
+  /** toxin=1 suppresses passiveDigestRate by this fraction (0..1). */
+  toxinSuppress: number;
 }
 
 /** Single pipeline per tick: stomach -> cell energy + heat to env. */
@@ -29,11 +33,19 @@ export function runDigestPhase(d: DigestPhaseDeps) {
       const boostMul = 1 + d.digestRuleBoost[idx];
       const sameRatio = d.sameOrgNeighborRatioByIdx(idx, org.id);
       const networkMul = d.digestNetworkBase + d.digestNetworkCoeff * sameRatio;
-      const digested = stomach * d.passiveDigestRate * enzymeEff * specBonus * boostMul * networkMul;
+      // Quadratic toxin suppression: low loads (≤0.3 typical) have negligible effect;
+      // only genuinely overloaded cells (toxin > 0.7) experience meaningful suppression.
+      const toxinLoad = d.world.toxin[idx] ?? 0;
+      const effectiveDigestRate = d.passiveDigestRate * (1 - toxinLoad * toxinLoad * d.toxinSuppress);
+      const digested = stomach * effectiveDigestRate * enzymeEff * specBonus * boostMul * networkMul;
       const heat = digested * d.digestionHeatLoss;
       d.world.setStomachByIdx(idx, stomach - digested);
       d.setCellEnergyCappedByIdx(idx, cellE + digested - heat, org.id);
       d.envEnergy[idx] += heat;
+      // Accumulate toxin byproduct from digestion (not energy — dimensionless modifier state).
+      if (digested > 1e-6) {
+        d.world.toxin[idx] = Math.min(1, toxinLoad + digested * d.toxinDigestRate);
+      }
     }
   }
 }

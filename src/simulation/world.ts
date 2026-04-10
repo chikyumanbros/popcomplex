@@ -13,12 +13,20 @@ export class World {
   ruleRoutes: Uint32Array;
   /** Per-cell decay gauge (0..1): deterministic rot progression when cell energy is dead. */
   rot: Float32Array;
+  /**
+   * Per-cell metabolic toxin load (0..1, dimensionless modifier).
+   * Accumulates as a byproduct of digestion and foreign-contact stress.
+   * Suppresses digest efficiency; high load accelerates rot on energy-depleted cells.
+   * Not itself energy — does not affect the closed energy budget.
+   */
+  toxin: Float32Array;
   nextOrganismId = 1;
 
   constructor() {
     this.cellData = new Uint32Array(TOTAL_CELLS * U32_PER_CELL);
     this.ruleRoutes = new Uint32Array(TOTAL_CELLS);
     this.rot = new Float32Array(TOTAL_CELLS);
+    this.toxin = new Float32Array(TOTAL_CELLS);
   }
 
   // --- positional helpers ---
@@ -40,6 +48,7 @@ export class World {
     this.cellData[b + 7] = lineagePacked & 0xffffff;
     this.ruleRoutes[idx] = 0;
     this.rot[idx] = 0;
+    this.toxin[idx] = 0;
   }
 
   getCellType(x: number, y: number): CellType {
@@ -126,6 +135,26 @@ export class World {
     return (this.cellData[idx * U32_PER_CELL + 3] >> (slot * 8)) & 0xFF;
   }
 
+  /**
+   * Differentiation commit level (0..255) for this cell, packed in bits 24-31 of cellData[b+1].
+   * 0 = uncommitted (Stem), 255 = fully committed to current type.
+   * This byte is preserved by all neural-state writes (actionFire, propagateSignals).
+   */
+  getCommitByIdx(idx: number): number {
+    return (this.cellData[idx * U32_PER_CELL + 1] >>> 24) & 0xFF;
+  }
+
+  setCommitByIdx(idx: number, value: number) {
+    const b = idx * U32_PER_CELL + 1;
+    this.cellData[b] = (this.cellData[b] & 0x00FFFFFF) | ((value & 0xFF) << 24);
+  }
+
+  /** Set cell type (bits 0-7 of cellData[b+1]) while preserving neuralState, refractory, and commit bits. */
+  setCellTypeByIdx(idx: number, type: number) {
+    const b = idx * U32_PER_CELL + 1;
+    this.cellData[b] = (this.cellData[b] & 0xFFFFFF00) | (type & 0xFF);
+  }
+
   /** Local routing table for proxy rule execution: returns three donor rule indices (0..MAX_RULES-1). */
   getRuleRoutesByIdx(idx: number): [number, number, number] {
     const p = this.ruleRoutes[idx] >>> 0;
@@ -164,12 +193,17 @@ export class World {
     return id;
   }
 
-  /** Push each organism’s **public** kin tag (“face”) into GPU field [7] for all its cells (tint + neighbor trust). */
+  /**
+   * Push each organism's public kin tag ("face") into GPU field [7] for all its cells.
+   * Bits  0-23: lineage color tag (tint + neighbor trust).
+   * Bits 24-31: developmental stage (0-3) for optional GPU-side visualization.
+   */
   syncLineageToCells(organisms: OrganismManager) {
     for (const org of organisms.organisms.values()) {
       const p = org.tape.getPublicKinTagPacked() & 0xffffff;
+      const packed = ((org.stage & 0xFF) << 24) | p;
       for (const idx of org.cells) {
-        this.cellData[idx * U32_PER_CELL + 7] = p;
+        this.cellData[idx * U32_PER_CELL + 7] = packed;
       }
     }
   }

@@ -42,6 +42,7 @@ export interface ActionDispatchDeps {
   actionRepair: (cell: DispatchCell, org: Organism, tape: Tape, intensity: number) => boolean;
   actionSpill: (cell: DispatchCell, amount: number) => boolean;
   actionJam: (cell: DispatchCell, intensity: number) => boolean;
+  actionApoptose: (cell: DispatchCell, rotBoost: number, energyDumpFrac: number, targetSelf: boolean) => boolean;
 }
 
 export function dispatchAction(
@@ -129,6 +130,15 @@ export function dispatchAction(
     case ActionOpcode.JAM: {
       const ok = deps.actionJam(cell, mod / 255);
       if (ok) deps.writeFeedback(org, 5, mod);
+      return ok;
+    }
+    case ActionOpcode.APOPTOSE: {
+      // actionParam % 2: 0 → self-targeting, odd → weakest same-org neighbor
+      const targetSelf = rule.actionParam % 2 === 0;
+      const rotBoost      = 0.12 + (mod / 255) * 0.28; // 0.12..0.40
+      const energyDumpFrac = 0.30 + (mod / 255) * 0.40; // 0.30..0.70
+      const ok = deps.actionApoptose(cell, rotBoost, energyDumpFrac, targetSelf);
+      if (ok) deps.writeFeedback(org, 2, mod); // slot 2: shared with SPILL/apoptose
       return ok;
     }
     default:

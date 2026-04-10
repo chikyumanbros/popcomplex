@@ -1,17 +1,10 @@
 import { ActionOpcode } from '../tape';
-
-// Action energy costs (heat -> environment)
-const ACTION_COST_FIRE = 0.4;
-const ACTION_COST_MOVE = 0.5;
-const ACTION_COST_REPRODUCE = 5.0;
-const ACTION_COST_ABSORB = 0.3;
-const ACTION_COST_DIGEST = 0.2;
-const ACTION_COST_TAKE = 0.1;
-const ACTION_COST_GIVE = 0.05;
-const ACTION_COST_EMIT = 0.15;
-const ACTION_COST_REPAIR = 0.28;
-const ACTION_COST_SPILL = 0.08;
-const ACTION_COST_JAM = 0.06;
+import {
+  ACTION_COST_FIRE, ACTION_COST_MOVE, ACTION_COST_REPRODUCE,
+  ACTION_COST_ABSORB, ACTION_COST_DIGEST, ACTION_COST_TAKE,
+  ACTION_COST_GIVE, ACTION_COST_EMIT, ACTION_COST_REPAIR,
+  ACTION_COST_SPILL, ACTION_COST_JAM,
+} from '../sim-constants';
 
 export function getActionCostForOpcode(opcode: ActionOpcode): number {
   switch (opcode) {
@@ -45,6 +38,8 @@ export function getActionCostForOpcode(opcode: ActionOpcode): number {
       return ACTION_COST_SPILL;
     case ActionOpcode.JAM:
       return ACTION_COST_JAM;
+    case ActionOpcode.APOPTOSE:
+      return 0; // energy is recycled internally; no additional env heat cost
     default: {
       const _x: never = opcode;
       return _x;

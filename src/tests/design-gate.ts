@@ -8,6 +8,7 @@ import { setRandomSeed } from '../simulation/rng';
 import { measurePopulationMetrics, measureEnergyBookkeeping } from '../simulation/energy-metrics';
 import { snapshotAndResetTelemetry } from '../simulation/telemetry';
 import { initSimulation } from '../simulation/init-simulation';
+import { simulationTick } from '../simulation/simulation-tick';
 
 type GateStatus = 'PASS' | 'WARN' | 'FAIL';
 
@@ -106,17 +107,7 @@ function runScenario(seed: number, ticks: number, metabolicScale: number): RunSu
 
   let occupiedAt20 = 0;
   for (let t = 1; t <= ticks; t++) {
-    organisms.syncNeuralWeightsFromTape();
-    ruleEval.updateNeuralNetworks();
-    ruleEval.evaluate();
-    ruleEval.digestPhase();
-    ruleEval.applyMetabolicCost();
-    ruleEval.applyOrganismOverhead();
-    ruleEval.cleanupDeadOrganisms();
-    ruleEval.splitDisconnected();
-    organisms.tick();
-    world.syncLineageToCells(organisms);
-    ruleEval.enforceClosedEnergyBudget();
+    simulationTick(world, organisms, ruleEval);
 
     if (t === 20) {
       occupiedAt20 = measureEnergyBookkeeping(world, ruleEval).occupiedCells;
@@ -161,7 +152,7 @@ function evaluateDesignGate(): GateResult[] {
   const mutPresence = mutationPresenceRate(parent.data, viableChildren);
   const invOpcode = invalidOpcodeRate(viableChildren);
 
-  const seeds = [3006, 3007, 3010];
+  const seeds = [206456512, 2692316758, 3748455232, 4021240216];
   const baseRuns = seeds.map((s) => runScenario(s, 220, 0.6));
   const harshRuns = seeds.map((s) => runScenario(s, 220, 0.9));
 

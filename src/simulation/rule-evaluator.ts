@@ -1,4 +1,4 @@
-import { CellType, GRID_WIDTH, GRID_HEIGHT, TOTAL_CELLS, ENV_DIFFUSION_RATE } from './constants';
+import { CellType, GRID_WIDTH, GRID_HEIGHT, TOTAL_CELLS } from './constants';
 import {
   ActionOpcode,
   CONDITIONS_OFFSET,
@@ -16,7 +16,7 @@ import {
 } from './tape';
 import { transcribeForReproductionOutcome } from './transcription';
 import { type World, U32_PER_CELL } from './world';
-import { type Organism, type OrganismManager, NN_OUTPUT, NN_MOVE } from './organism';
+import { type Organism, type OrganismManager, NN_EAT, NN_MOVE, NN_GROW, NN_CONSERVE } from './organism';
 import { randomF32 } from './rng';
 import type { BudgetMode, SuppressionMode } from './runtime-config';
 import {
@@ -38,6 +38,36 @@ import {
   recordXenoTransferAttempt,
 } from './telemetry';
 import { getActionCostForOpcode, MOVE_COST_PER_CELL, REPRODUCE_ACTION_COST } from './behaviors/action-costs';
+import { type CellCtx, clamp01, lerp } from './evaluator-context';
+import {
+  REPAIR_NEIGHBOR_COEFF, REPAIR_BASE_P, REPAIR_DEG_HEAL, REPAIR_DEG_HEAL_SPREAD_FRAC,
+  REPAIR_RULE_BYPASS_BASE_P, REPAIR_INVALID_OPCODE_TARGET_BONUS,
+  PROXY_EXEC_TAX_BASE, FAILSOFT_TAX_BASE,
+  KIN_TRUST_CAP_FOREIGN, KIN_TRUST_FOREIGN_SCALE, KIN_GIVE_MIN_TRUST, KIN_GIVE_RATE_CAP,
+  KIN_GIVE_EXTRA_HEAT, REPAIR_FOREIGN_KIN_WEIGHT, SAME_ORG_TRANSFER_MISMATCH_EXTRA,
+  ISOLATION_METABOLIC_PENALTY, PASSIVE_DIGEST_RATE, DIGESTION_HEAT_LOSS,
+  LOW_ENERGY_LEAK_MAX, DIGEST_NETWORK_BASE, DIGEST_NETWORK_COEFF, DIGEST_RULE_BOOST_CAP,
+  PASSIVE_ABSORB_RATE, SCAN_TAX_ALL, SCAN_TAX_NOP_EXTRA, SCAN_TAX_INVALID_EXTRA,
+  FOREIGN_INTERFACE_METABOLISM, MOVE_REPEL_FOREIGN_FACE, MOVE_REPEL_MAP_EDGE_FACE,
+  DIAGONAL_MOVE_COST_MULT, DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_BASE, DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN,
+  DIV_CHOICE_TOP_K, DIV_CHOICE_BASE_W, ENV_GRAD_FLAT, ENV_GRAD_STEEP,
+  DIV_TEMP_FLAT, DIV_TEMP_STEEP, OUTER_EAT_MULT_FLAT, OUTER_EAT_MULT_STEEP,
+  OUTER_ABSORB_MULT_FLAT, OUTER_ABSORB_MULT_STEEP,
+  ABSORB_RELAX_RATE,
+  XENO_TAPE_TRANSFER_STOMACH_K, XENO_TAPE_TRANSFER_HEAT, XENO_TRANSFER_CONTACT_SCALE,
+  DIFF_COMMIT_RISE, DIFF_COMMIT_FALL, DIFF_COMMIT_UPPER, DIFF_COMMIT_LOWER, DIFF_MIN_SCORE,
+  SENSOR_EAT_BONUS, MOTOR_MOVE_DISCOUNT, REPRO_DIGEST_BONUS,
+  DEV_JUVENILE_EAT_BONUS, DEV_GROWING_DIV_DISCOUNT, DEV_MATURE_REPRO_DISCOUNT,
+  XENO_LEARN_RATE, XENO_TRUST_SCALE,
+  TOXIN_DIGEST_RATE, TOXIN_SUPPRESS, TOXIN_FOREIGN_RATE,
+  TOXIN_REPAIR_CLEAR,
+  MIN_CELLS_TO_REPRODUCE, REPRODUCE_COOLDOWN_TICKS,
+  ORG_OVERHEAD_PER_TICK, DISSOLVE_SINGLE_MULT, DISSOLVE_BASE,
+  SPLIT_CHILD_EXTRA_COOLDOWN, MORPHOGEN_DIFFUSION, MORPHOGEN_DECAY,
+  MARKER_BUMP, SOCIAL_SIGNAL_CONSENSUS_RATE, SOCIAL_REPAIR_COHESION_BONUS,
+  JAM_MIN_TICKS, JAM_MAX_EXTRA_TICKS,
+  MARKER_EAT, MARKER_DIGEST, MARKER_SIGNAL, MARKER_MOVE,
+  } from './sim-constants';
 import { dispatchAction } from './behaviors/action-dispatch';
 import {
   computeForeignContactPressure,
@@ -56,7 +86,7 @@ import {
   computeJamTtl,
   countRepulsionFacesForShift,
 } from './behaviors/exclusion-actions';
-import { spillStomachToNearbyEnv } from './behaviors/vent-actions';
+import { spillStomachToNearbyEnv, apoptoseCell } from './behaviors/vent-actions';
 import {
   computeAbsorbEdgeScalars,
   computeGroupBoostFromSize,
@@ -66,6 +96,11 @@ import {
   DEFAULT_GROUP_SCAN_CAP,
 } from './behaviors/foreign-edge';
 import { runDigestPhase } from './phases/digest-phase';
+import { runEnvDiffusion } from './phases/env-diffusion-phase';
+import { runPropagateSignals } from './phases/signal-phase';
+import { runEnforceClosedEnergyBudget } from './phases/energy-budget-phase';
+import { runUpdateNeuralNetworks } from './phases/neural-phase';
+import { runApplyDevelopmentPhase, runApplyToxinPassivePhase } from './phases/passive-phase';
 import { applyMetabolicCostPhase, applyOrganismOverheadPhase } from './phases/metabolism-phase';
 import { cleanupDeadOrganismsPhase } from './phases/cleanup-phase';
 import {
@@ -95,158 +130,24 @@ function popcount24(v: number): number {
   return n;
 }
 
-// Tape REPAIR (immune): same-org neighbor quorum boosts success (collective error correction bias)
-const REPAIR_NEIGHBOR_COEFF = 0.16; // success mult += coeff * weighted neighbor quorum (Moore)
-const REPAIR_BASE_P         = 0.36; // base success before bias × intensity
-// REPAIR is meant to be "life-extending error correction", not instant restoration.
-const REPAIR_DEG_HEAL       = 12;   // degradation subtracted on success (primary byte)
-const REPAIR_DEG_HEAL_SPREAD_FRAC = 0.25; // small neighborhood "reflow" per success
-const REPAIR_RULE_BYPASS_BASE_P = 0.18;   // quorum-gated: copy a good rule into a broken slot (re-route)
-/** Extra targeting weight for invalid rule opcode bytes (makes immune repair visibly "keep the program running"). */
-const REPAIR_INVALID_OPCODE_TARGET_BONUS = 220;
-
-// Proxy execution / fail-soft is "distributed redundancy": it should cost something, especially under harsh metabolism.
-const PROXY_EXEC_TAX_BASE = 0.12; // energy units paid to env per proxy attempt (scaled)
-const FAILSOFT_TAX_BASE = 0.18;   // energy units paid to env on fail-soft idle action (scaled)
-
-// Cross-org “kin” trust: public kin tag on cell (tape bytes 28–31, “face”) + signal marker + morph A — all must roughly match (face-only mimicry stays weak; private genetic bytes 33–36 are not used here).
-const KIN_TRUST_CAP_FOREIGN      = 0.52;
-const KIN_TRUST_FOREIGN_SCALE    = 1.12;
-const KIN_GIVE_MIN_TRUST         = 0.36;
-const KIN_GIVE_RATE_CAP          = 0.24;   // vs same-org GIVE strength
-const KIN_GIVE_EXTRA_HEAT        = 0.2;    // mis-altruism waste scales with imperfect trust
-const REPAIR_FOREIGN_KIN_WEIGHT  = 0.4;    // foreign neighbor adds trust*this to repair quorum (capped trust above)
-/** Same-org GIVE/TAKE: extra heat when local signal marker + morph A disagree with neighbor (no new state). */
-const SAME_ORG_TRANSFER_MISMATCH_EXTRA = 0.14; // added to base 0.1 fractional loss at worst alignment (after floor)
-
-// Structural constants (NOT evolvable — facts of physics)
-const ISOLATION_METABOLIC_PENALTY = 0.12; // isolated cell pays up to +12% metabolic vs well-connected tissue
-const PASSIVE_DIGEST_RATE     = 0.15;
-const DIGESTION_HEAT_LOSS     = 0.25;
-const LOW_ENERGY_LEAK_MAX     = 0.08;
-/**
- * Connectivity bonus in digestion: isolated cells digest less efficiently, well-connected tissues digest better.
- * This biases survival toward networked morphologies without adding non-conservative energy.
- */
-const DIGEST_NETWORK_BASE     = 0.82; // same-neighbor ratio 0.0 -> 82% of baseline digest throughput
-const DIGEST_NETWORK_COEFF    = 0.32; // ratio 1.0 (8 same Moore neighbors) -> +32%
-/**
- * Max extra digest multiplier from DIGEST opcodes this tick per cell (applied in digestPhase only).
- * Neighbor stomachs are not used — avoids order-dependent “parasitic” multi-cell stripping and double-counting
- * with a passive+active split. Final boost is cap-clamped; rule-table order can still affect which DIGEST rows
- * pay cost once the cap is full.
- */
-const DIGEST_RULE_BOOST_CAP   = 1.0;
-const PASSIVE_ABSORB_RATE     = 0.15;
-// Rule-table scan tax: tiny universal scan cost + extra penalty for dead rows.
-const SCAN_TAX_ALL            = 0.00005;
-const SCAN_TAX_NOP_EXTRA      = 0.00035;
-const SCAN_TAX_INVALID_EXTRA  = 0.00100;
-
-/** Orthogonal contact with another organism: passive interface “tension” (energy → env, closed system). */
-const FOREIGN_INTERFACE_METABOLISM = 0.055;
-/** MOVE score penalty per foreign face after a rigid shift (discourages sliding along / into heterospecifics). */
-const MOVE_REPEL_FOREIGN_FACE = 14;
-/** MOVE score penalty per world-edge face after shift (soft repulsion from map boundary). */
-const MOVE_REPEL_MAP_EDGE_FACE = 4;
-const DIAGONAL_MOVE_COST_MULT = Math.SQRT2;
-/** Base diagonal bonus to counter axis-aligned lattice preference. */
-const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_BASE = 0;
-/** Extra diagonal bonus scaled by NN move drive (keeps the preference in the NN path). */
-const DIAGONAL_MOVE_SCORE_BIAS_PER_CELL_NN = 0;
-
-// ==================== BRANCHING SHAPE BIASES ====================
-/**
- * DIV target selection: instead of always taking the single max-env neighbor (greedy),
- * choose stochastically among the best candidates. This increases branching / exploration.
- */
-const DIV_CHOICE_TOP_K = 4;
-/** Small baseline so even low-env empty tiles remain possible. */
-const DIV_CHOICE_BASE_W = 0.15;
-/**
- * Environment-gradient-conditioned morphology:
- * - Flat env → "wormy" exploration (less greedy DIV, stronger interface/absorb bonus).
- * - Steep env → "planty" tip growth (greedier DIV, stronger boundary feeding bonus).
- *
- * This avoids arbitrary mode switches: the same physics yields different morphologies under different env structure.
- */
-const ENV_GRAD_FLAT = 0.5;
-const ENV_GRAD_STEEP = 6.0;
-const DIV_TEMP_FLAT = 10.0;
-const DIV_TEMP_STEEP = 3.5;
-const OUTER_EAT_MULT_FLAT = 1.20;
-const OUTER_EAT_MULT_STEEP = 1.60;
-const OUTER_ABSORB_MULT_FLAT = 1.35;
-const OUTER_ABSORB_MULT_STEEP = 1.15;
-
-function clamp01(x: number): number {
-  return Math.max(0, Math.min(1, x));
-}
-
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-/**
- * ABSORB at a heterospecific face: a single continuous interaction.
- * - Morph affinity → more symmetric relax (cell↔cell equalization).
- * - Mismatch → more stomach inflow (neighbor cell energy → actor stomach).
- * - JAM acts like immunity: it dampens both good (relax) and bad (steal) coupling.
- * - A “breaker” (immune inhibition) can reduce JAM effectiveness, at extra heat cost.
- */
-const ABSORB_RELAX_RATE = 0.26;
-// Network-scaled immunity/breaking: use same-org connected group size near the acting cell (bounded scan).
-const ABSORB_GROUP_SCAN_CAP = DEFAULT_GROUP_SCAN_CAP;
-const XENO_TAPE_TRANSFER_STOMACH_K = 2.4;  // stomach-gated integration: higher gut load raises transfer fixation odds
-const XENO_TAPE_TRANSFER_HEAT = 0.08;      // integration stress: small heat fee on successful transfer
-const XENO_TRANSFER_CONTACT_SCALE = 0.50;  // contact-route transfer intensity scale (smaller => stronger contact route)
-
-// Reproduction requires a minimum network size (must DIV first)
-const MIN_CELLS_TO_REPRODUCE  = 2;
-
-// Anti-monoculture: slow "rational apex" that tiles the whole grid
-const REPRODUCE_COOLDOWN_TICKS   = 40;   // min ticks between successful REPRODUCE per org
-
-// Selection pressure: fragments do not amortize organism-level cost (real culling + fewer org spam)
-const ORG_OVERHEAD_PER_TICK      = 0.042; // each lineage pays this from its biomass → env (same for 1-cell or 72-cell)
-const DISSOLVE_SINGLE_MULT       = 1.45;    // 1-cell orgs dissolve slightly faster when e<=0
-const DISSOLVE_BASE              = 0.016;
-
-// Connectivity pressure: split-born shards cannot reproduce immediately.
-const SPLIT_CHILD_EXTRA_COOLDOWN = 12;
-
-// Morphogen physics
-const MORPHOGEN_DIFFUSION     = 0.2;   // 20% spreads to each neighbor per tick
-const MORPHOGEN_DECAY         = 0.05;  // 5% decay per tick
-
-// Specialization marker bump per action execution
-const MARKER_BUMP = 4;
-const SOCIAL_SIGNAL_CONSENSUS_RATE = 0.06; // local same-org gossip coupling per tick
-const SOCIAL_REPAIR_COHESION_BONUS = 0.03; // cohesive neighborhoods repair slightly more reliably
-const JAM_MIN_TICKS = 2;
-const JAM_MAX_EXTRA_TICKS = 3;
-
-// Marker slots: 0=eat, 1=digest, 2=signal, 3=move
-const MARKER_EAT    = 0 as const;
-const MARKER_DIGEST = 1 as const;
-const MARKER_SIGNAL = 2 as const;
-const MARKER_MOVE   = 3 as const;
-const BUDGET_RESCALE_THRESHOLD = 0.5;
-
-interface CellCtx {
-  x: number; y: number; idx: number;
-  energy: number; orgId: number;
-}
+// (Tuning constants imported from ./sim-constants; CellCtx / clamp01 / lerp from ./evaluator-context)
 
 interface RuleEvaluatorOptions {
   budgetMode?: BudgetMode;
   suppressionMode?: SuppressionMode;
   metabolicScale?: number;
   distressFireChanceScale?: number;
-  /** Optional coupling (0..1) for gating NN input sensitivity by reactive stress proxy. Default 0 for baseline stability. */
+  /** 0..1: how much reactive stress modulates NN input sensitivity (default 0). */
   stressNnMix?: number;
-  /** Optional coupling (0..1) for gating NN input sensitivity by territorial-claim proxy. Default 0. */
+  /** 0..1: how much territorial-claim proxy modulates NN input sensitivity (default 0). */
   claimNnMix?: number;
+  /**
+   * When true, `evaluate()` skips the CPU env-diffusion step.
+   * The caller (main.ts) is responsible for dispatching the GPU compute shader
+   * and reading back the result into `this.envEnergy` before the next tick.
+   * Headless / test environments always use CPU diffusion (false by default).
+   */
+  useGpuDiffusion?: boolean;
 }
 
 /**
@@ -281,6 +182,8 @@ export class RuleEvaluator {
   private jamTicks: Uint8Array;
   private groupSizeCache: Map<number, number> = new Map();
   private static readonly BROKEN_CAP_FALLBACK = 0;
+  /** If true, stepEnvDiffusion is skipped; GPU pipeline is responsible for diffusion. */
+  readonly useGpuDiffusion: boolean;
 
   /**
    * Closed thermodynamic budget: sum(env) + Σ(cell E) + Σ(stomach) = this value.
@@ -300,6 +203,7 @@ export class RuleEvaluator {
     this.distressFireChanceScale = opts.distressFireChanceScale ?? 1;
     this.stressNnMix = clamp01(opts.stressNnMix ?? 0);
     this.claimNnMix = clamp01(opts.claimNnMix ?? 0);
+    this.useGpuDiffusion = opts.useGpuDiffusion ?? false;
     this.jamTicks = new Uint8Array(TOTAL_CELLS);
   }
 
@@ -440,209 +344,29 @@ export class RuleEvaluator {
 
   /** Rescale env so sum(env) = ecosystemEnergyBudget − biomass (fixes diffusion boundary drift + float). */
   enforceClosedEnergyBudget() {
-    let bio = 0;
-    let es = 0;
-    for (let i = 0; i < TOTAL_CELLS; i++) {
-      es += this.envEnergy[i];
-      if (this.world.getOrganismIdByIdx(i) === 0) continue;
-      bio += this.world.getCellEnergyByIdx(i) + this.world.getStomachByIdx(i);
-    }
-
-    let targetEnv = this.ecosystemEnergyBudget - bio;
-    if (targetEnv < -1e-4) {
-      const over = -targetEnv;
-      this.scaleDownBiomass(over, bio);
-      let bio2 = 0;
-      for (let i = 0; i < TOTAL_CELLS; i++) {
-        if (this.world.getOrganismIdByIdx(i) === 0) continue;
-        bio2 += this.world.getCellEnergyByIdx(i) + this.world.getStomachByIdx(i);
-      }
-      targetEnv = this.ecosystemEnergyBudget - bio2;
-    }
-
-    if (targetEnv <= 0) {
-      for (let i = 0; i < TOTAL_CELLS; i++) this.envEnergy[i] = 0;
-      return;
-    }
-
-    if (es <= 1e-12) {
-      const per = targetEnv / TOTAL_CELLS;
-      for (let i = 0; i < TOTAL_CELLS; i++) this.envEnergy[i] = per;
-      return;
-    }
-
-    const errBeforeRescale = targetEnv - es;
-    if (this.budgetMode === 'local') {
-      if (Math.abs(errBeforeRescale) <= BUDGET_RESCALE_THRESHOLD) {
-        const anchor = this.findBudgetAnchorIndex();
-        this.envEnergy[anchor] = Math.max(0, this.envEnergy[anchor] + errBeforeRescale);
-        return;
-      }
-    }
-
-    const sc = targetEnv / es;
-    for (let i = 0; i < TOTAL_CELLS; i++) {
-      this.envEnergy[i] = Math.max(0, this.envEnergy[i] * sc);
-    }
-
-    let s2 = 0;
-    for (let i = 0; i < TOTAL_CELLS; i++) s2 += this.envEnergy[i];
-    const err = targetEnv - s2;
-    if (Math.abs(err) > 1e-5) {
-      const anchor = this.findBudgetAnchorIndex();
-      this.envEnergy[anchor] = Math.max(0, this.envEnergy[anchor] + err);
-    }
+    runEnforceClosedEnergyBudget({
+      world: this.world,
+      envEnergy: this.envEnergy,
+      ecosystemEnergyBudget: this.ecosystemEnergyBudget,
+      budgetMode: this.budgetMode,
+      setCellEnergyCappedByIdx: (idx, e, hint) => this.setCellEnergyCappedByIdx(idx, e, hint),
+    });
   }
 
-  private findBudgetAnchorIndex(): number {
-    for (let i = 0; i < TOTAL_CELLS; i++) {
-      if (this.world.getOrganismIdByIdx(i) !== 0) return i;
-    }
-    return 0;
-  }
 
-  private scaleDownBiomass(reduceBioBy: number, knownBio?: number) {
-    let bio: number;
-    if (knownBio !== undefined) {
-      bio = knownBio;
-    } else {
-      bio = 0;
-      for (let i = 0; i < TOTAL_CELLS; i++) {
-        if (this.world.getOrganismIdByIdx(i) === 0) continue;
-        bio += this.world.getCellEnergyByIdx(i) + this.world.getStomachByIdx(i);
-      }
-    }
-    if (bio <= 1e-12) return;
-    const newBio = Math.max(0, bio - reduceBioBy);
-    const f = newBio / bio;
-    for (let i = 0; i < TOTAL_CELLS; i++) {
-      if (this.world.getOrganismIdByIdx(i) === 0) continue;
-      const e = this.world.getCellEnergyByIdx(i);
-      const st = this.world.getStomachByIdx(i);
-      this.setCellEnergyCappedByIdx(i, e * f);
-      this.world.setStomachByIdx(i, st * f);
-    }
-  }
+
 
   // ==================== NEURAL NETWORK UPDATE ====================
   updateNeuralNetworks() {
-    const dirs = this.neighborDirs();
-    const dirsLen = dirs.length;
-    for (const org of this.organisms.organisms.values()) {
-      if (org.cells.size === 0) continue;
-
-      let totalE = 0;
-      let totalS = 0;
-      let totalEnv = 0;
-      let boundaryCells = 0;
-      let foreignNeighbors = 0;
-      let markerDominance = 0;
-      let envGradient = 0;
-      let rotMax = 0;
-      for (const idx of org.cells) {
-        totalE += this.world.getCellEnergyByIdx(idx);
-        totalS += this.world.getStomachByIdx(idx);
-        totalEnv += this.envEnergy[idx];
-        rotMax = Math.max(rotMax, this.world.rot[idx] ?? 0);
-
-        const x = idx % GRID_WIDTH;
-        const y = (idx - x) / GRID_WIDTH;
-        if (this.isOuterCell(idx, org)) boundaryCells++;
-
-        for (const [dx, dy] of dirs) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
-          const nOrg = this.world.getOrganismId(nx, ny);
-          if (nOrg !== 0 && nOrg !== org.id) foreignNeighbors++;
-        }
-
-        markerDominance += this.dominantMarker(idx) / 255;
-        const c = this.envEnergy[idx];
-        let localMax = c;
-        for (const [dx, dy] of dirs) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
-          localMax = Math.max(localMax, this.envEnergy[ny * GRID_WIDTH + nx]);
-        }
-        envGradient += Math.max(0, localMax - c);
-      }
-      const n = org.cells.size;
-
-      // 8 inputs: avg energy, avg stomach, avg env, org size, boundary ratio,
-      // foreign contact ratio, marker dominance, local env gradient.
-      const avgEnergy01 = Math.min(1, (totalE / n) / 255);
-      const boundary01 = Math.min(1, boundaryCells / n);
-      const foreign01 = Math.min(1, foreignNeighbors / (n * dirsLen));
-      const marker01 = Math.min(1, markerDominance / n);
-      const grad01 = Math.min(1, (envGradient / n) / 20);
-
-      // Instant stress proxy: combines known stressors into a single reactive scalar.
-      // Weighting is intentionally conservative; evolved weights still dominate behaviour.
-      const stress01 = clamp01(
-        0.45 * (1 - avgEnergy01) +
-        0.25 * foreign01 +
-        0.20 * boundary01 +
-        0.10 * rotMax,
-      );
-      org.nnStress01 = stress01;
-
-      // Instant territorial-claim proxy: high when local marker dominance is strong, foreign contact is low,
-      // and the local gradient is weak (less pull to roam). This is the “stay / insist” counterpart to stress.
-      const claim01 = clamp01(
-        0.65 * marker01 +
-        0.20 * (1 - foreign01) +
-        0.15 * (1 - grad01),
-      );
-      org.nnClaim01 = claim01;
-
-      org.nnInput[0] = avgEnergy01;
-      org.nnInput[1] = Math.min(1, (totalS / n) / 255);
-      org.nnInput[2] = Math.min(1, (totalEnv / n) / 50);
-      org.nnInput[3] = Math.min(1, n / 64);
-      org.nnInput[4] = boundary01;
-      org.nnInput[5] = foreign01;
-      org.nnInput[6] = marker01;
-      org.nnInput[7] = grad01;
-
-      // Stress→NN coupling (recommended): gate *sensitivity* (input gains) rather than mixing meanings of inputs.
-      // `OrganismManager.syncNeuralWeightsFromTape()` runs every tick, so these gain tweaks are ephemeral.
-      if (this.stressNnMix > 0) {
-        const mix = this.stressNnMix;
-        const s = stress01;
-        const clampGain = (g: number) => Math.max(0.10, Math.min(3.00, g));
-
-        // Index mapping (see tape-nn docs / updateNeuralNetworks):
-        // 0 energy, 1 stomach, 2 env, 3 size, 4 boundary, 5 foreign, 6 marker, 7 gradient
-        // Under stress: downweight "energy optimism", upweight "threat/edge/gradient" reactivity a bit.
-        org.nn.inputGain[0] = clampGain(org.nn.inputGain[0] * (1 - 0.35 * mix * s));
-        org.nn.inputGain[4] = clampGain(org.nn.inputGain[4] * (1 + 0.55 * mix * s));
-        org.nn.inputGain[5] = clampGain(org.nn.inputGain[5] * (1 + 0.70 * mix * s));
-        org.nn.inputGain[7] = clampGain(org.nn.inputGain[7] * (1 + 0.45 * mix * s));
-      }
-
-      // Claim→NN coupling: bias attention toward “home marker” and away from roaming triggers.
-      if (this.claimNnMix > 0) {
-        const mix = this.claimNnMix;
-        const c = claim01;
-        const clampGain = (g: number) => Math.max(0.10, Math.min(3.00, g));
-
-        // Under claim: upweight marker; downweight gradient and foreign-contact sensitivity a bit.
-        org.nn.inputGain[6] = clampGain(org.nn.inputGain[6] * (1 + 0.70 * mix * c));
-        org.nn.inputGain[7] = clampGain(org.nn.inputGain[7] * (1 - 0.55 * mix * c));
-        org.nn.inputGain[5] = clampGain(org.nn.inputGain[5] * (1 - 0.35 * mix * c));
-      }
-
-      org.nn.forward(org.nnInput, org.nnOutput, org.nnPrimitives);
-
-      let best = 0;
-      for (let i = 1; i < NN_OUTPUT; i++) {
-        if (org.nnOutput[i] > org.nnOutput[best]) best = i;
-      }
-      org.nnDominant = best;
-    }
+    runUpdateNeuralNetworks({
+      world: this.world,
+      envEnergy: this.envEnergy,
+      organisms: this.organisms,
+      stressNnMix: this.stressNnMix,
+      claimNnMix: this.claimNnMix,
+    });
   }
+
 
   // ==================== MAIN TICK ====================
   evaluate() {
@@ -651,7 +375,7 @@ export class RuleEvaluator {
     for (let i = 0; i < TOTAL_CELLS; i++) {
       if (this.jamTicks[i] > 0) this.jamTicks[i]--;
     }
-    this.stepEnvDiffusion();
+    if (!this.useGpuDiffusion) this.stepEnvDiffusion();
     this.movedThisTick.clear();
     this.digestRuleBoost.fill(0);
     this.enforcePerCellEnergyCaps();
@@ -672,6 +396,9 @@ export class RuleEvaluator {
         this.applyForeignInterfaceMetabolism(idx, org.id);
         this.applySocialConsensusDrift(cell, org.id);
         this.world.decayMarkers(idx);
+        this.applyDevelopmentPhase(cell, org);
+        this.applyDifferentiationPhase(cell, org);
+        this.applyToxinPassivePhase(cell);
       }
     }
 
@@ -851,7 +578,7 @@ export class RuleEvaluator {
   // flags: [7:res][6:chain][5:4:comparison][3:2:item][1:0:target]
   // target: 0=self, 1=org, 2=neighbor, 3=env
   // self:   0=energy, 1=moodProb, 2=morphA, 3=morphB
-  // org:    0=cells, 1=totalE, 2=age, 3=avgMorphA
+  // org:    0=cells, 1=totalE, 2=stage (0/64/128/192 for JUVENILE/GROWING/MATURE/SENESCENT), 3=avgMorphA
   // neigh:  0=same, 1=foreign, 2=empty, 3=is_outer(0/255)
   // env:    0=here, 1=gradient, 2=max_neighbor, 3=specialization(dominant marker)
   // comp:   0=GT, 1=LT, 2=EQ±5, 3=NEQ±5
@@ -885,7 +612,7 @@ export class RuleEvaluator {
         switch (item) {
           case 0: return org.cells.size;
           case 1: return Math.min(255, this.orgTotalEnergy(org));
-          case 2: return Math.min(255, org.age);
+          case 2: return org.stage * 64; // developmental stage: 0/64/128/192 for JUVENILE/GROWING/MATURE/SENESCENT
           case 3: return Math.min(255, this.orgAvgMorphA(org) * 10);
         }
         break;
@@ -960,6 +687,7 @@ export class RuleEvaluator {
       actionRepair: (c, o, t, intensity) => this.actionRepair(c, o, t, intensity),
       actionSpill: (c, amount) => this.actionSpill(c, amount),
       actionJam: (c, intensity) => this.actionJam(c, intensity),
+      actionApoptose: (c, rotBoost, dumpFrac, targetSelf) => this.actionApoptose(c, rotBoost, dumpFrac, targetSelf),
     });
   }
 
@@ -1061,18 +789,31 @@ export class RuleEvaluator {
     const outerMul = this.isBoundaryCell(cell)
       ? lerp(OUTER_EAT_MULT_FLAT, OUTER_EAT_MULT_STEEP, grad01)
       : 1;
-    // No baseline intake at zero vitality; passiveAbsorb covers the "inert soaking" path.
-    const maxEat = maxGather * vitality * specBonus * coordination * outerMul;
+    // Sensor cells are optimized for harvesting: small boost to gather limit.
+    const typeBonus = this.world.getCellTypeByIdx(cell.idx) === CellType.Sensor
+      ? (1 + SENSOR_EAT_BONUS) : 1;
+    // Juvenile organisms feed more aggressively (rapid early growth phase).
+    const org = this.organisms.get(cell.orgId);
+    const stageBonus = org && org.stage === 0 ? (1 + DEV_JUVENILE_EAT_BONUS) : 1;
+    // NN_EAT drive: organisms with higher EAT mood gather more efficiently (0.5x-1.5x).
+    const nnEatDrive = org ? Math.max(0.5, Math.min(1.5, 0.5 + (org.nnOutput[NN_EAT] ?? 0.25))) : 1;
+    const maxEat = maxGather * vitality * specBonus * typeBonus * stageBonus * coordination * outerMul * nnEatDrive;
     let gathered = 0;
     const spots: [number, number][] = [[cell.x, cell.y]];
     for (const [dx, dy] of this.neighborDirs()) {
       spots.push([cell.x + dx, cell.y + dy]);
     }
+    // Reduce "heat recycling": on flat env, make harvesting less efficient; also never harvest from
+    // the same cell index where many costs are deposited into envEnergy.
+    const harvestFrac = lerp(0.05, 0.10, grad01);
     for (const [px, py] of spots) {
       if (px < 0 || px >= GRID_WIDTH || py < 0 || py >= GRID_HEIGHT) continue;
       const ei = py * GRID_WIDTH + px;
+      if (ei === cell.idx) continue;
+      // Only harvest from empty environment tiles to avoid direct recycling from living tissue.
+      if (this.world.getOrganismIdByIdx(ei) !== 0) continue;
       const avail = this.envEnergy[ei];
-      const take = Math.min(avail * 0.1, maxEat - gathered);
+      const take = Math.min(avail * harvestFrac, maxEat - gathered);
       if (take < 0.001) continue;
       this.envEnergy[ei] -= take;
       gathered += take;
@@ -1094,7 +835,12 @@ export class RuleEvaluator {
     if (own < 0.01) return false;
     if (this.digestRuleBoost[cell.idx] >= DIGEST_RULE_BOOST_CAP - 1e-8) return false;
     const specBonus = 1 + this.world.getMarkerByIdx(cell.idx, MARKER_DIGEST) / 255;
-    const contribution = rate * specBonus;
+    // Reproductive cells are better at converting stomach to energy (anabolic role).
+    const typeBonus = this.world.getCellTypeByIdx(cell.idx) === CellType.Reproductive
+      ? (1 + REPRO_DIGEST_BONUS) : 1;
+    // NN_CONSERVE drive: organisms in conservation mood digest more efficiently (0.8x-1.3x).
+    const nnConserveDrive = Math.max(0.8, Math.min(1.3, 0.8 + (org.nnOutput[NN_CONSERVE] ?? 0.25) * 0.5));
+    const contribution = rate * specBonus * typeBonus * nnConserveDrive;
     this.digestRuleBoost[cell.idx] = Math.min(
       DIGEST_RULE_BOOST_CAP,
       this.digestRuleBoost[cell.idx] + contribution,
@@ -1109,6 +855,13 @@ export class RuleEvaluator {
   }
 
   /** 0..KIN_TRUST_CAP_FOREIGN for foreign cells; same-org callers should not use this (returns 0 if same org). */
+  /** Clamp xenoTolerance of `orgId` by `delta` (−1..+1 range). */
+  private nudgeXenoTolerance(orgId: number, delta: number) {
+    const org = this.organisms.get(orgId);
+    if (!org) return;
+    org.xenoTolerance = Math.max(-1, Math.min(1, org.xenoTolerance + delta));
+  }
+
   private kinTrustForeign(selfIdx: number, nIdx: number, selfOrgId: number): number {
     const nOrg = this.world.getOrganismIdByIdx(nIdx);
     if (nOrg === 0 || nOrg === selfOrgId) return 0;
@@ -1127,7 +880,12 @@ export class RuleEvaluator {
 
     const g = Math.max(0, lineageSim) * Math.max(0, signalSim) * Math.max(0, morphSim);
     if (g <= 0) return 0;
-    return Math.min(KIN_TRUST_CAP_FOREIGN, Math.cbrt(g) * KIN_TRUST_FOREIGN_SCALE);
+    const base = Math.cbrt(g) * KIN_TRUST_FOREIGN_SCALE;
+    // xenoTolerance modulates how openly self extends trust to foreigners:
+    // positive history → trust amplified; negative history → trust suppressed.
+    const xenoOrg = this.organisms.get(selfOrgId);
+    const xenoMod = xenoOrg ? (1 + XENO_TRUST_SCALE * xenoOrg.xenoTolerance) : 1;
+    return Math.min(KIN_TRUST_CAP_FOREIGN, base * xenoMod);
   }
 
   /**
@@ -1304,6 +1062,11 @@ export class RuleEvaluator {
     const spread = Math.max(1, Math.round(heal * REPAIR_DEG_HEAL_SPREAD_FRAC));
     if (idx > 0) tape.degradation[idx - 1] = Math.max(0, tape.degradation[idx - 1] - spread);
     if (idx + 1 < TAPE_SIZE) tape.degradation[idx + 1] = Math.max(0, tape.degradation[idx + 1] - spread);
+
+    // 4) Detoxification: REPAIR doubles as cellular detox (no energy cost — just biochemical cleanup).
+    if (this.world.toxin[cell.idx] > 0) {
+      this.world.toxin[cell.idx] = Math.max(0, this.world.toxin[cell.idx] - TOXIN_REPAIR_CLEAR);
+    }
     return true;
   }
 
@@ -1402,7 +1165,10 @@ export class RuleEvaluator {
   private actionDivide(cell: CellCtx, org: Organism, tape: Tape, divCost: number): boolean {
     const maxCells = tape.getMaxCells();
     if (org.cells.size >= maxCells) return false;
-    if (cell.energy < divCost) return false;
+    // Growing organisms divide more efficiently (lower cost threshold).
+    const growingDiscount = org.stage === 1 ? DEV_GROWING_DIV_DISCOUNT : 0;
+    const effectiveDivCost = divCost * (1 - growingDiscount);
+    if (cell.energy < effectiveDivCost) return false;
 
     type Cand = { x: number; y: number; env: number };
     const cands: Cand[] = [];
@@ -1440,8 +1206,8 @@ export class RuleEvaluator {
     }
     const chosen = topK[pick]!;
 
-    const overhead = divCost * 0.15;
-    const childE = divCost - overhead;
+    const overhead = effectiveDivCost * 0.15;
+    const childE = effectiveDivCost - overhead;
     const childCap = this.safeCellEnergyCapForOrg(cell.orgId);
     const childStored = Math.min(childE, childCap);
     const childOverflow = Math.max(0, childE - childStored);
@@ -1455,28 +1221,124 @@ export class RuleEvaluator {
       tape.getPublicKinTagPacked(),
     );
     org.cells.add(chosen.y * GRID_WIDTH + chosen.x);
-    cell.energy -= divCost;
+    cell.energy -= effectiveDivCost;
     cell.energy = this.setCellEnergyCapped(cell.x, cell.y, cell.energy, cell.orgId);
     this.envEnergy[cell.idx] += overhead + childOverflow;
     return true;
   }
 
-  private chooseChildCellType(cell: CellCtx, org: Organism, nx: number, ny: number): CellType {
-    const envAtChild = this.envEnergy[ny * GRID_WIDTH + nx];
-    const mood = org.nnDominant;
-
-    if (mood === 2) return CellType.Motor;
-    if (mood === 1 && org.cells.size >= 6) return CellType.Reproductive;
-    if (envAtChild > 8 || this.envGradientScaled(cell.x, cell.y) > 2) return CellType.Sensor;
-    if (this.world.getMarkerByIdx(cell.idx, MARKER_DIGEST) > 120) return CellType.Reproductive;
+  private chooseChildCellType(_cell: CellCtx, _org: Organism, _nx: number, _ny: number): CellType {
+    // Differentiation is now handled organically via the commit system.
+    // All new cells start as Stem (commit=0) and differentiate as commit builds.
     return CellType.Stem;
+  }
+
+  /**
+   * Developmental phase: apply stage-specific per-cell effects.
+   * - JUVENILE: EAT boost is handled inline in actionEat.
+   * - MATURE: no inline energy discount (previously caused budget leak); advantage reserved for future NN/cooldown path.
+   * - SENESCENT: passive rot accumulation per cell per tick (soft aging, no death event).
+   * Does NOT create a death event; dissolution is still handled by cleanupDeadOrganismsPhase.
+   */
+  private applyDevelopmentPhase(cell: CellCtx, org: Organism): void {
+    runApplyDevelopmentPhase(this.world, cell, org);
+  }
+
+  private applyToxinPassivePhase(cell: CellCtx): void {
+    runApplyToxinPassivePhase(this.world, cell);
+  }
+
+  /**
+   * Per-cell differentiation update run in the passive phase.
+   * - Adjusts the commit level based on local stability vs. stress.
+   * - Triggers type transitions (Stem→type, type→Stem) at hysteresis thresholds.
+   * Does NOT move any energy, so conservation is not affected.
+   */
+  private applyDifferentiationPhase(cell: CellCtx, org: Organism): void {
+    const idx = cell.idx;
+    const commit = this.world.getCommitByIdx(idx);
+    const ct = this.world.getCellTypeByIdx(idx);
+
+    // --- Stability: what makes a cell "settled" in its niche ---
+    const sameRatio = this.sameOrgNeighborRatioByIdx(idx, cell.orgId);
+    const cohesion  = this.localSignalCohesion(cell);
+    const morphA    = this.world.getMorphogenA(idx);
+    const morphB    = this.world.getMorphogenB(idx);
+    const stabilityScore = clamp01(
+      0.50 * sameRatio +
+      0.30 * cohesion +
+      0.20 * Math.min(1, (morphA + morphB) / 4),
+    );
+
+    // --- Stress: what dislodges a cell from its niche ---
+    const rot             = Math.min(1, this.world.rot[idx] ?? 0);
+    const foreignNeighbors = this.countNeighborsByType(cell, 'foreign');
+    const energyRatio     = clamp01(cell.energy / 15);
+    const stressScore = clamp01(
+      0.40 * (1 - energyRatio) +
+      0.35 * (foreignNeighbors / 8) +
+      0.25 * rot,
+    );
+
+    // --- Update commit ---
+    const delta = stabilityScore - stressScore;
+    let newCommit = commit;
+    if (delta > 1e-4) {
+      newCommit = Math.min(255, commit + Math.round(DIFF_COMMIT_RISE * delta * 2));
+    } else if (delta < -1e-4) {
+      newCommit = Math.max(0, commit + Math.round(DIFF_COMMIT_FALL * delta * 2));
+    }
+    if (newCommit !== commit) this.world.setCommitByIdx(idx, newCommit);
+
+    // --- Type transitions with hysteresis ---
+    if (ct === CellType.Stem) {
+      if (newCommit >= DIFF_COMMIT_UPPER) {
+        const targetType = this.chooseDiffType(cell, org);
+        if (targetType !== CellType.Stem) {
+          this.world.setCellTypeByIdx(idx, targetType);
+        }
+      }
+    } else {
+      // De-differentiate: commit dropped below lower threshold
+      if (newCommit < DIFF_COMMIT_LOWER) {
+        this.world.setCellTypeByIdx(idx, CellType.Stem);
+      }
+    }
+  }
+
+  /**
+   * Choose a differentiation target for a Stem cell based on its local niche signals.
+   * Returns CellType.Stem if no type is clearly favored.
+   */
+  private chooseDiffType(cell: CellCtx, org: Organism): CellType {
+    const isOuter    = this.isOuterCell(cell.idx, org);
+    const morphA     = this.world.getMorphogenA(cell.idx);
+    const eatMarker  = this.world.getMarkerByIdx(cell.idx, MARKER_EAT);
+    const digestMk   = this.world.getMarkerByIdx(cell.idx, MARKER_DIGEST);
+    const moveMk     = this.world.getMarkerByIdx(cell.idx, MARKER_MOVE);
+    const sameRatio  = this.sameOrgNeighborRatioByIdx(cell.idx, cell.orgId);
+
+    // Sensor: favored on outer boundary with high env / morphA / eat marker / NN_EAT drive
+    const sensorScore  = (isOuter ? 1.4 : 0.3) + morphA * 0.05 + eatMarker / 255 + (org.nnOutput[NN_EAT] ?? 0) * 0.8;
+    // Motor: favored when NN drives movement and move marker is strong
+    const motorScore   = (org.nnOutput[NN_MOVE] ?? 0) * 1.5 + moveMk / 255;
+    // Reproductive: favored in dense, well-connected tissue with active digestion
+    const reproScore   = sameRatio * 1.5 + digestMk / 255 + (org.nnOutput[NN_GROW] ?? 0);
+
+    const best = Math.max(sensorScore, motorScore, reproScore);
+    if (best < DIFF_MIN_SCORE) return CellType.Stem;
+
+    if (best === sensorScore) return CellType.Sensor;
+    if (best === motorScore)  return CellType.Motor;
+    return CellType.Reproductive;
   }
 
   private actionFire(cell: CellCtx, _org?: Organism): boolean {
     const b = cell.idx * U32_PER_CELL;
     const packed = this.world.cellData[b + 1];
     if (((packed >> 8) & 0xFF) !== 0) return false;
-    this.world.cellData[b + 1] = (packed & 0xFF) | (1 << 8);
+    // Preserve bits 24-31 (commit level) while setting neuralState=1
+    this.world.cellData[b + 1] = (packed & 0xFF000000) | (packed & 0xFF) | (1 << 8);
     return true;
   }
 
@@ -1521,7 +1383,10 @@ export class RuleEvaluator {
     const moveMult = dx !== 0 && dy !== 0 ? DIAGONAL_MOVE_COST_MULT : 1;
     for (const idx of org.cells) {
       const e = this.world.getCellEnergyByIdx(idx);
-      const cost = Math.min(e, MOVE_COST_PER_CELL * moveMult);
+      // Motor cells pay slightly less movement cost (optimized locomotion).
+      const typeDiscount = this.world.getCellTypeByIdx(idx) === CellType.Motor
+        ? (1 - MOTOR_MOVE_DISCOUNT) : 1;
+      const cost = Math.min(e, MOVE_COST_PER_CELL * moveMult * typeDiscount);
       this.setCellEnergyCappedByIdx(idx, e - cost, org.id);
       this.envEnergy[idx] += cost;
     }
@@ -1547,7 +1412,10 @@ export class RuleEvaluator {
         return false;
       }
     }
-    const minRequired = REPRODUCE_ACTION_COST + 1;
+    // Mature organisms can trigger reproduction at a lower energy threshold (peak fitness).
+    const reproDiscount = org.stage === 2 ? DEV_MATURE_REPRO_DISCOUNT : 0;
+    const effectiveReproCost = REPRODUCE_ACTION_COST * (1 - reproDiscount);
+    const minRequired = effectiveReproCost + 1;
     if (cell.energy < minRequired) return false;
     // Local organization: same-org Moore neighbor density and signal cohesion at the reproduction site.
     // Used to scale reproduction proofreading (aligned with REPAIR's local-quorum concept).
@@ -1600,9 +1468,12 @@ export class RuleEvaluator {
         }
       }
       const childId = this.world.nextOrganismId++;
-      const budget = cell.energy - REPRODUCE_ACTION_COST;
+      const budget = cell.energy - effectiveReproCost;
       const degradedFactor = outcome.degraded ? Math.max(0.08, 1 - 0.85 * outcome.failP) : 1;
-      const childE = budget * childFraction * degradedFactor;
+      // Cap childE so parent never goes below 0 after paying REPRODUCE_ACTION_COST overhead.
+      // Without this cap, MATURE cells in [minRequired, REPRODUCE_ACTION_COST+1] would create energy.
+      const childEUncapped = budget * childFraction * degradedFactor;
+      const childE = Math.min(childEUncapped, Math.max(0, cell.energy - REPRODUCE_ACTION_COST));
       this.organisms.register(childId, childTape, { parentId: org.id, birthTick: this.simTick });
       const childCap = this.safeCellEnergyCapForOrg(childId);
       const childStored = Math.min(childE, childCap);
@@ -1681,6 +1552,8 @@ export class RuleEvaluator {
               this.setCellEnergyCapped(nx, ny, neAfter - delta, nOrg);
               cell.energy = this.setCellEnergyCapped(cell.x, cell.y, eC + delta, cell.orgId);
               moved = delta;
+              // Receiving energy from a foreign neighbor: cooperative-contact signal.
+              this.nudgeXenoTolerance(cell.orgId, XENO_LEARN_RATE * Math.min(1, delta));
             }
           } else {
             let amt = Math.min(-delta, eC);            // can't take more than cell has
@@ -1738,6 +1611,33 @@ export class RuleEvaluator {
     );
   }
 
+  /**
+   * APOPTOSE: voluntarily accelerate rot on self (or the weakest same-org neighbor) and recycle
+   * that cell's energy to surviving same-org Moore neighbors.
+   * Does NOT create a death event — dissolution still goes through the existing rot≥1 cleanup path.
+   */
+  private actionApoptose(
+    cell: CellCtx,
+    rotBoost: number,
+    energyDumpFrac: number,
+    targetSelf: boolean,
+  ): boolean {
+    return apoptoseCell(
+      cell,
+      cell.orgId,
+      targetSelf,
+      rotBoost,
+      energyDumpFrac,
+      (idx) => this.world.getOrganismIdByIdx(idx),
+      (idx) => this.world.getCellEnergyByIdx(idx),
+      (idx, value) => this.world.setCellEnergyByIdx(idx, value),
+      (idx, delta) => { this.envEnergy[idx] += delta; },
+      this.world.rot,
+      GRID_WIDTH,
+      GRID_HEIGHT,
+    );
+  }
+
   /** Defensive cut: short-lived jam at foreign boundary edges around this cell. */
   private actionJam(cell: CellCtx, intensity: number): boolean {
     const ttl = computeJamTtl(intensity, JAM_MIN_TICKS, JAM_MAX_EXTRA_TICKS);
@@ -1761,7 +1661,7 @@ export class RuleEvaluator {
   }
 
   /** On-demand same-org connected component size around `seedIdx` (bounded by `cap` for performance). */
-  private sameOrgConnectedGroupSize(seedIdx: number, orgId: number, cap = ABSORB_GROUP_SCAN_CAP): number {
+  private sameOrgConnectedGroupSize(seedIdx: number, orgId: number, cap = DEFAULT_GROUP_SCAN_CAP): number {
     const key = (orgId << 16) ^ (seedIdx & 0xffff);
     const hit = this.groupSizeCache.get(key);
     if (hit !== undefined) return hit;
@@ -1904,6 +1804,8 @@ export class RuleEvaluator {
       digestionHeatLoss: DIGESTION_HEAT_LOSS,
       digestNetworkBase: DIGEST_NETWORK_BASE,
       digestNetworkCoeff: DIGEST_NETWORK_COEFF,
+      toxinDigestRate: TOXIN_DIGEST_RATE,
+      toxinSuppress: TOXIN_SUPPRESS,
     });
   }
 
@@ -2059,61 +1961,17 @@ export class RuleEvaluator {
     this.envEnergy[cell.idx] += cost;
   }
 
-  /** Spatial redistribution of env energy; global sum drift from open boundaries is corrected by `enforceClosedEnergyBudget`. */
+  /** Spatial redistribution of env energy; global sum drift is corrected by `enforceClosedEnergyBudget`. */
   private stepEnvDiffusion() {
-    const dirs = this.neighborDirs();
-    const src = this.envEnergy;
-    const dst = this.envScratch;
-    for (let y = 0; y < GRID_HEIGHT; y++) {
-      for (let x = 0; x < GRID_WIDTH; x++) {
-        const i = y * GRID_WIDTH + x;
-        const c = src[i];
-        let sum = 0,
-          cnt = 0;
-        for (const [dx, dy] of dirs) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
-          sum += src[ny * GRID_WIDTH + nx];
-          cnt++;
-        }
-        dst[i] = c + (sum / cnt - c) * ENV_DIFFUSION_RATE;
-      }
-    }
-    this.envEnergy = dst;
-    this.envScratch = src;
+    runEnvDiffusion(this.envEnergy, this.envScratch);
+    // Swap ping-pong buffers.
+    const tmp = this.envEnergy;
+    this.envEnergy = this.envScratch;
+    this.envScratch = tmp;
   }
 
-  /**
-   * **Source of truth for same-org neural propagation** after FIRE/SIG. Reads/writes packed state in
-   * `world.cellData` (+1 word: cellType | neuralState<<8 | refractory<<16). Not mirrored by any
-   * active GPU compute shader in the current build.
-   */
   private propagateSignals(org: Organism, tape: Tape) {
-    const refPeriod = tape.getRefractoryPeriod();
-    for (const idx of org.cells) {
-      const b = idx * U32_PER_CELL;
-      const packed = this.world.cellData[b + 1];
-      const ns = (packed >> 8) & 0xFF;
-      const refCnt = (packed >> 16) & 0xFF;
-      const ct = packed & 0xFF;
-      if (ns === 1) {
-        this.world.cellData[b + 1] = ct | (2 << 8) | (refPeriod << 16);
-        const x = idx % GRID_WIDTH, y = (idx - x) / GRID_WIDTH;
-        for (const [dx, dy] of this.neighborDirs()) {
-          const nx = x + dx, ny = y + dy;
-          if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT) continue;
-          const ni = ny * GRID_WIDTH + nx;
-          if (!org.cells.has(ni)) continue;
-          const np = this.world.cellData[ni * U32_PER_CELL + 1];
-          if (((np >> 8) & 0xFF) === 0) {
-            this.world.cellData[ni * U32_PER_CELL + 1] = (np & 0xFF) | (1 << 8);
-          }
-        }
-      } else if (ns === 2) {
-        this.world.cellData[b + 1] = refCnt <= 1 ? ct : ct | (2 << 8) | ((refCnt - 1) << 16);
-      }
-    }
+    runPropagateSignals(this.world, org, tape);
   }
 
   /**
@@ -2247,6 +2105,10 @@ export class RuleEvaluator {
     if (tax <= 0) return;
     this.setCellEnergyCappedByIdx(idx, e - tax, orgId);
     this.envEnergy[idx] += tax;
+    // Paying interface tax is a hostile-contact signal: nudge xenoTolerance negative.
+    this.nudgeXenoTolerance(orgId, -XENO_LEARN_RATE * Math.min(1, tax));
+    // Foreign-contact stress also accumulates intracellular toxin.
+    this.world.toxin[idx] = Math.min(1, this.world.toxin[idx] + faces * TOXIN_FOREIGN_RATE);
   }
 
   private envGradientScaled(x: number, y: number): number {
@@ -2305,7 +2167,7 @@ export class RuleEvaluator {
   }
 
   private moveOrg(org: Organism, dx: number, dy: number) {
-    const snaps: Array<{ newIdx: number; data: Uint32Array; routes: number; rot: number }> = [];
+    const snaps: Array<{ newIdx: number; data: Uint32Array; routes: number; rot: number; toxin: number }> = [];
     for (const idx of org.cells) {
       const base = idx * U32_PER_CELL;
       snaps.push({
@@ -2313,16 +2175,19 @@ export class RuleEvaluator {
         data: this.world.cellData.slice(base, base + U32_PER_CELL),
         routes: this.world.ruleRoutes[idx] >>> 0,
         rot: this.world.rot[idx] ?? 0,
+        toxin: this.world.toxin[idx] ?? 0,
       });
       for (let i = 0; i < U32_PER_CELL; i++) this.world.cellData[base + i] = 0;
       this.world.ruleRoutes[idx] = 0;
       this.world.rot[idx] = 0;
+      this.world.toxin[idx] = 0;
     }
     org.cells.clear();
     for (const s of snaps) {
       this.world.cellData.set(s.data, s.newIdx * U32_PER_CELL);
       this.world.ruleRoutes[s.newIdx] = s.routes;
       this.world.rot[s.newIdx] = s.rot;
+      this.world.toxin[s.newIdx] = s.toxin;
       org.cells.add(s.newIdx);
     }
   }

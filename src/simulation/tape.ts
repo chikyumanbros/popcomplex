@@ -20,6 +20,9 @@ export const TAPE_SNAPSHOT_BYTES = TAPE_SIZE * 2;
  * **`TAPE_SIZE` is not plug-and-play**: region sizes (`CA_RULES_SIZE`, rule table, NN block) are fixed numbers that must sum to `TAPE_SIZE`. Raising `TAPE_SIZE` without reallocating offsets breaks layout and snapshot codecs.
  */
 export const CA_RULES_OFFSET = 32;
+
+/** Bytes 37-39 in the CA band encode developmental stage age-thresholds (evolvable). */
+export const DEV_STAGE_THRESH_OFFSET = 37;
 const CA_RULES_SIZE = 32;
 export const CONDITIONS_OFFSET = 64;
 const CONDITIONS_SIZE = 64;
@@ -117,10 +120,11 @@ export enum ActionOpcode {
   REPAIR = 0x0C,   // immune: mend tape; neighbor quorum boosts success (same-org + partial foreign “kin” if lineage+signal+morph align)
   SPILL = 0x0D,    // spill local stomach content into nearby environment (1-hop redistribution)
   JAM = 0x0E,      // short-lived boundary disconnection against cross-lineage coupling
+  APOPTOSE = 0x0F, // accelerate self (or weakest same-org neighbor) rot + recycle cell energy to surviving neighbors
 }
 
 /** Highest defined `ActionOpcode` value (inclusive). Raw bytes above this are invalid until REPAIR or mutation. */
-export const MAX_VALID_ACTION_OPCODE = ActionOpcode.JAM;
+export const MAX_VALID_ACTION_OPCODE = ActionOpcode.APOPTOSE;
 export const ENERGY_CAP_MODULE_ORDER: readonly ActionOpcode[] = [
   ActionOpcode.DIV,
   ActionOpcode.DIGEST,
@@ -289,6 +293,22 @@ export class Tape {
   }
 
   /**
+   * Read the three age-thresholds for developmental stage transitions.
+   * Returns [t1, t2, t3] where:
+   *   org.age >= t1 → GROWING (stage 1)
+   *   org.age >= t2 → MATURE  (stage 2)
+   *   org.age >= t3 → SENESCENT (stage 3)
+   * Values are raw bytes (0-255) and evolve via mutation like any other CA-band bytes.
+   */
+  getDevStageThresholds(): [number, number, number] {
+    return [
+      this.data[DEV_STAGE_THRESH_OFFSET]!,
+      this.data[DEV_STAGE_THRESH_OFFSET + 1]!,
+      this.data[DEV_STAGE_THRESH_OFFSET + 2]!,
+    ];
+  }
+
+  /**
    * Per-cell storage cap decoded from a dedicated tape bank.
    *
    * Encoding (CA band):
@@ -451,7 +471,7 @@ export class Tape {
 const COND_TARGET = ['self', 'org', 'nb', 'env'];
 const COND_ITEM: string[][] = [
   ['e', 'mood', 'mA', 'mB'],
-  ['cells', 'totE', 'age', 'avgA'],
+  ['cells', 'totE', 'stage', 'avgA'],
   ['same', 'for', 'emp', 'out'],
   ['here', 'grad', 'maxE', 'dom'],
 ];
@@ -623,6 +643,10 @@ export function createProtoTape(): Tape {
   d[CA_RULES_OFFSET] = 0x03; // refractoryPeriod = 3
   for (let i = 1; i < CA_RULES_SIZE; i++) d[CA_RULES_OFFSET + i] = 128;
   syncGeneticKinFromPublic(d);
+  // Developmental stage thresholds (bytes 37-39) override the 128 fill above:
+  d[DEV_STAGE_THRESH_OFFSET]     = 40;  // JUVENILE→GROWING  at age 40
+  d[DEV_STAGE_THRESH_OFFSET + 1] = 100; // GROWING→MATURE    at age 100
+  d[DEV_STAGE_THRESH_OFFSET + 2] = 180; // MATURE→SENESCENT  at age 180
   // Energy storage capability subsystem in CA free band:
   // 11 active modules => cap = 8 + 11*8 = 96 (recommended default).
   encodeEnergyCapBank(d, 11);
@@ -668,7 +692,7 @@ export function createProtoTape(): Tape {
   //  - Small clusters can still REPAIR occasionally (not only when neigh.same>2).
   //  - Old lineages get a periodic maintenance drive even if their behavior drifts.
   wr(14, 0b00_00_00_10, 0,   ActionOpcode.REPAIR,      1); // neigh.same>0 → REPAIR
-  wr(15, 0b00_00_10_01, 220, ActionOpcode.REPAIR,      1); // org.age>220 → REPAIR
+  wr(15, 0b00_00_00_10, 1,   ActionOpcode.APOPTOSE,    1); // neigh.foreign>1 → APOPTOSE weakest neighbor
 
   // === NN params (bytes 128-255) — fixed, not random (reproducible normal starter)
   let s = PROTO_TAPE_NN_SEED | 0;

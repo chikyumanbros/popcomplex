@@ -1,6 +1,7 @@
 import { initWebGPU } from './gpu/context';
 import { createBuffers, writeUniform } from './gpu/buffers';
 import { createRenderPipeline } from './gpu/pipelines/render';
+import { createEnvDiffusionPipeline } from './gpu/pipelines/env-diffusion';
 import { World } from './simulation/world';
 import { OrganismManager } from './simulation/organism';
 import { ActionOpcode } from './simulation/tape';
@@ -11,7 +12,7 @@ import { EcologyTrendChart } from './ui/ecology-chart';
 import { setupInspector } from './ui/inspector';
 import { OrgPortrait } from './ui/org-portrait';
 import { StatsTracker } from './ui/stats';
-import { GRID_WIDTH, GRID_HEIGHT } from './simulation/constants';
+import { GRID_WIDTH, GRID_HEIGHT, ENV_DIFFUSION_RATE } from './simulation/constants';
 import {
   measureEnergyBookkeeping,
   measurePopulationMetrics,
@@ -24,6 +25,7 @@ import { setRandomSeed, getRandomSeed } from './simulation/rng';
 import { readRuntimeConfigFromUrl } from './simulation/runtime-config';
 import { snapshotAndResetTelemetry, snapshotTelemetry } from './simulation/telemetry';
 import { initSimulation } from './simulation/init-simulation';
+import { simulationTick } from './simulation/simulation-tick';
 
 /** Full-grid `measurePopulationMetrics` only every N sim ticks — halves CPU vs chart+logs at speed 1. */
 const CHART_SAMPLE_EVERY_SIM_TICK = 2;
@@ -57,6 +59,7 @@ async function main() {
 
   const buffers = createBuffers(gpu.device);
   const renderer = createRenderPipeline(gpu, buffers);
+  const envDiffusion = createEnvDiffusionPipeline(gpu.device, buffers, ENV_DIFFUSION_RATE);
 
   const world = new World();
   const organisms = new OrganismManager();
@@ -67,6 +70,7 @@ async function main() {
     distressFireChanceScale: cfg.distressFireChanceScale,
     stressNnMix: cfg.stressNnMix,
     claimNnMix: cfg.claimNnMix,
+    useGpuDiffusion: true,
   });
 
   // Canonical init: env field + (culture/multiOrigin) shaping + inoculation.
@@ -149,6 +153,37 @@ async function main() {
   let lastChartPopForLog: PopulationMetrics | null = null;
   let lastChartSampleTick = -1;
 
+  // GPU env-diffusion state: 1-tick async readback.
+  const ENV_ENERGY_SIZE = GRID_WIDTH * GRID_HEIGHT * 4; // f32 per cell
+  const envDiffuseStaging = gpu.device.createBuffer({
+    label: 'env-diffuse-staging',
+    size: ENV_ENERGY_SIZE,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+  });
+  let pendingGpuEnvReadback: Promise<void> | null = null;
+
+  /** Apply GPU diffusion result to CPU env; call at start of frame if readback ready. */
+  async function applyGpuDiffusionReadback() {
+    if (!pendingGpuEnvReadback) return;
+    await pendingGpuEnvReadback;
+    pendingGpuEnvReadback = null;
+    const mapped = new Float32Array(envDiffuseStaging.getMappedRange());
+    ruleEval.envEnergy.set(mapped);
+    envDiffuseStaging.unmap();
+  }
+
+  /** Dispatch GPU diffusion and start async readback for next frame. */
+  function startGpuDiffusion(pingpong: number) {
+    if (envDiffuseStaging.mapState !== 'unmapped') return; // previous read not yet consumed
+    const enc = gpu!.device.createCommandEncoder({ label: 'gpu-diffuse' });
+    envDiffusion.dispatch(enc, pingpong);
+    // Copy the output buffer (write side of ping-pong) to staging for readback.
+    const outputBuf = buffers.envEnergy[(pingpong + 1) % 2]!;
+    enc.copyBufferToBuffer(outputBuf, 0, envDiffuseStaging, 0, ENV_ENERGY_SIZE);
+    gpu!.device.queue.submit([enc.finish()]);
+    pendingGpuEnvReadback = envDiffuseStaging.mapAsync(GPUMapMode.READ);
+  }
+
   // Frame rate limiting (optional: set to 0 for unlimited, or e.g. 60 for 60fps cap)
   const TARGET_FPS = 0; // 0 = unlimited
   const FRAME_MIN_MS = TARGET_FPS > 0 ? 1000 / TARGET_FPS : 0;
@@ -167,7 +202,7 @@ async function main() {
   function runSimStepBatch(steps: number): boolean {
     let advanced = false;
     for (let s = 0; s < steps; s++) {
-      simulationTick(world, organisms, ruleEval, ui);
+      localSimulationTick(world, organisms, ruleEval, ui);
       trackTurnover();
       tick++;
       advanced = true;
@@ -316,6 +351,9 @@ async function main() {
     stats.recordFrame();
     frameCount++;
 
+    // Apply GPU diffusion result from previous frame (1-tick lag, fire-and-forget style).
+    void applyGpuDiffusionReadback();
+
     let advanced = false;
     if (!ui.paused || ui.stepRequested) {
       const steps = ui.stepRequested ? 1 : ui.speed;
@@ -323,10 +361,13 @@ async function main() {
       advanced = runSimStepBatch(steps);
     }
 
-    // GPU: display only — full sim (rules, metabolism, neural propagation) runs on CPU first.
+    // Upload CPU state to GPU for rendering and for next GPU diffusion pass.
     world.uploadTo(gpu!.device, buffers.cellState[0]);
     gpu!.device.queue.writeBuffer(buffers.envEnergy[0], 0, ruleEval.envEnergy.buffer);
     gpu!.device.queue.writeBuffer(buffers.rot, 0, world.rot.buffer);
+
+    // Dispatch GPU env-diffusion (reads envEnergy[0], writes envEnergy[1], starts readback).
+    startGpuDiffusion(0);
     // Component highlight toggle: on->upload current, off->zero once.
     if (ui.componentHighlight !== lastComponentHighlight) {
       lastComponentHighlight = ui.componentHighlight;
@@ -394,24 +435,15 @@ async function main() {
   }
 }
 
-function simulationTick(
+// simulationTick is imported from './simulation/simulation-tick'
+// The _ui parameter is kept for the local call-site signature compatibility.
+function localSimulationTick(
   world: World,
   organisms: OrganismManager,
   ruleEval: RuleEvaluator,
   _ui: UIState,
 ) {
-  // Keep genotype->phenotype mapping explicit: NN is rebuilt from tape every tick.
-  organisms.syncNeuralWeightsFromTape();
-  ruleEval.updateNeuralNetworks();
-  ruleEval.evaluate();
-  ruleEval.digestPhase();
-  ruleEval.applyMetabolicCost();
-  ruleEval.applyOrganismOverhead();
-  ruleEval.cleanupDeadOrganisms();
-  ruleEval.splitDisconnected();
-  organisms.tick();
-  world.syncLineageToCells(organisms);
-  ruleEval.enforceClosedEnergyBudget();
+  simulationTick(world, organisms, ruleEval);
 }
 
 interface LogWorldStateOpts {

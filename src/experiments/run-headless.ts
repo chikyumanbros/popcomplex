@@ -11,6 +11,7 @@ import { snapshotAndResetTelemetry } from '../simulation/telemetry';
 import { countInvalidRuleOpcodes } from '../simulation/tape-health';
 import type { BudgetMode, SuppressionMode } from '../simulation/runtime-config';
 import { initSimulation } from '../simulation/init-simulation';
+import { simulationTick } from '../simulation/simulation-tick';
 
 interface CliArgs {
   seed: number;
@@ -162,17 +163,7 @@ function main() {
   ];
 
   for (let tick = 1; tick <= args.ticks; tick++) {
-    organisms.syncNeuralWeightsFromTape();
-    ruleEval.updateNeuralNetworks();
-    ruleEval.evaluate();
-    ruleEval.digestPhase();
-    ruleEval.applyMetabolicCost();
-    ruleEval.applyOrganismOverhead();
-    ruleEval.cleanupDeadOrganisms();
-    ruleEval.splitDisconnected();
-    organisms.tick();
-    world.syncLineageToCells(organisms);
-    ruleEval.enforceClosedEnergyBudget();
+    simulationTick(world, organisms, ruleEval);
 
     const currentIds = new Set<number>(organisms.organisms.keys());
     for (const org of organisms.organisms.values()) {

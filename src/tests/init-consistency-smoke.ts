@@ -5,6 +5,7 @@ import { OrganismManager } from '../simulation/organism';
 import { RuleEvaluator } from '../simulation/rule-evaluator';
 import { initSimulation } from '../simulation/init-simulation';
 import { setRandomSeed } from '../simulation/rng';
+import { simulationTick } from '../simulation/simulation-tick';
 import { biomassReservoirTotal, measureEnergyBookkeeping } from '../simulation/energy-metrics';
 
 function sumEnv(env: Float32Array): number {
@@ -36,17 +37,7 @@ function runMode(seed: number, mode: { culture: boolean; multiOrigin: boolean },
   const orgs0 = organisms.count;
 
   for (let t = 0; t < ticks; t++) {
-    organisms.syncNeuralWeightsFromTape();
-    ruleEval.updateNeuralNetworks();
-    ruleEval.evaluate();
-    ruleEval.digestPhase();
-    ruleEval.applyMetabolicCost();
-    ruleEval.applyOrganismOverhead();
-    ruleEval.cleanupDeadOrganisms();
-    ruleEval.splitDisconnected();
-    organisms.tick();
-    world.syncLineageToCells(organisms);
-    ruleEval.enforceClosedEnergyBudget();
+    simulationTick(world, organisms, ruleEval);
   }
 
   const bk = measureEnergyBookkeeping(world, ruleEval);
